@@ -17,6 +17,4 @@ xlsxwriter>=3.1.0
 openpyxl>=3.1.0
 <<<<<<< HEAD
 pygame>=2.5.0
-=======
 pygame>=2.5.0
->>>>>>> 54497f25d2b094c71e067259b3ee285afd532dba
