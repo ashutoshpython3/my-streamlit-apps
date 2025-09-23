@@ -20,6 +20,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+#Function to read the portfolio file
+def read_portfolio():
+    # Get the directory of the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    portfolio_path = os.path.join(script_dir, "portfolio.csv")
+    
+    try:
+        portfolio = pd.read_csv(portfolio_path)
+        return portfolio
+    except FileNotFoundError:
+        st.error(f"Portfolio file not found at {portfolio_path}")
+        return pd.DataFrame()
+
 # File paths for data persistence
 PORTFOLIO_FILE = "portfolio_data.json"
 TRANSACTIONS_FILE = "transactions_data.json"

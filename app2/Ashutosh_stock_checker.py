@@ -18,6 +18,18 @@ from plotly.subplots import make_subplots
 import base64
 from io import BytesIO
 
+# Function to get stock data with error handling
+def get_stock_data(ticker, start_date, end_date):
+    try:
+        stock_data = yf.download(ticker, start=start_date, end=end_date)
+        if stock_data.empty:
+            st.error(f"No data found for {ticker}")
+            return None
+        return stock_data
+    except Exception as e:
+        st.error(f"Error fetching stock data: {e}")
+        return None
+
 warnings.filterwarnings('ignore')
 
 # Set page configuration
