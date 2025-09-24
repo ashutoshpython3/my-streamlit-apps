@@ -11,7 +11,7 @@ from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 import time as tm
 import warnings
-from playsound import playsound
+import pygame  # Replaced playsound with pygame
 import threading
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -24,18 +24,29 @@ import threading
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Sound alert function with error handling
+# Initialize pygame mixer for sound
+pygame.mixer.init()
+
+# Sound alert function with error handling - updated to use pygame
 def play_alert_sound(alert_type="alert"):
     try:
         if alert_type == "alert":
             # Try to play the alert sound, but ignore if file not found
             try:
-                playsound('alert.mp3')
+                # Get the root directory (assuming assets is in the root)
+                root_dir = os.path.dirname(os.path.abspath(__file__))
+                alert_path = os.path.join(root_dir, "assets", "alert.mp3")
+                pygame.mixer.music.load(alert_path)
+                pygame.mixer.music.play()
             except:
                 pass
         elif alert_type == "warning":
             try:
-                playsound('warning.mp3')
+                # Get the root directory (assuming assets is in the root)
+                root_dir = os.path.dirname(os.path.abspath(__file__))
+                warning_path = os.path.join(root_dir, "assets", "warning.mp3")
+                pygame.mixer.music.load(warning_path)
+                pygame.mixer.music.play()
             except:
                 pass
     except Exception as e:
@@ -145,50 +156,59 @@ def generate_sample_data(symbol='^NSEI', days=30):
     return df
 
 # Generate sample intraday data
-def generate_sample_intraday_data(symbol='^NSEI', timeframe_minutes=15):
+def generate_sample_intraday_data(symbol='^NSEI', timeframe_minutes=15, days=15):
     st.info(f"Generating sample intraday data for {symbol} for testing purposes...")
     
-    # Create today's date
-    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
+    # Create date range for the last 15 days
+    end_date = datetime.now(pytz.timezone('Asia/Kolkata'))
+    start_date = end_date - timedelta(days=days)
     
-    # Create timestamps for market hours (9:15 to 15:30)
-    start_time = datetime.combine(today, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
-    end_time = datetime.combine(today, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
+    # Create business day range
+    dates = pd.date_range(start=start_date, end=end_date, freq='B')
     
-    # Create 1-minute timestamps
-    timestamps = pd.date_range(start=start_time, end=end_time, freq='1min')
+    all_data = []
     
-    # Generate sample price data
-    np.random.seed(42)  # For reproducible results
-    base_price = 19500  # Approximate Nifty value
-    
-    intraday_data = []
-    for timestamp in timestamps:
-        # 1-minute price change with some randomness
-        change = np.random.normal(0, 0.0005)  # Small change for 1 minute
-        open_price = base_price * (1 + change * 0.5)
-        close_price = base_price * (1 + change)
-        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0002)))
-        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0002)))
+    for date in dates:
+        # Create timestamps for market hours (9:15 to 15:30)
+        start_time = datetime.combine(date, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
+        end_time = datetime.combine(date, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
         
-        # Volume with some randomness
-        volume = int(np.random.normal(5000, 1000))
+        # Create 1-minute timestamps
+        timestamps = pd.date_range(start=start_time, end=end_time, freq='1min')
         
-        intraday_data.append({
-            'timestamp': timestamp,
-            'open': open_price,
-            'high': high_price,
-            'low': low_price,
-            'close': close_price,
-            'volume': volume,
-            'oi': np.random.randint(1000, 5000)
-        })
+        # Generate sample price data
+        np.random.seed(42)  # For reproducible results
+        base_price = 19500  # Approximate Nifty value
         
-        # Update base price for next minute
-        base_price = close_price
+        intraday_data = []
+        for timestamp in timestamps:
+            # 1-minute price change with some randomness
+            change = np.random.normal(0, 0.0005)  # Small change for 1 minute
+            open_price = base_price * (1 + change * 0.5)
+            close_price = base_price * (1 + change)
+            high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0002)))
+            low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0002)))
+            
+            # Volume with some randomness
+            volume = int(np.random.normal(5000, 1000))
+            
+            intraday_data.append({
+                'timestamp': timestamp,
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': volume,
+                'oi': np.random.randint(1000, 5000)
+            })
+            
+            # Update base price for next minute
+            base_price = close_price
+        
+        all_data.extend(intraday_data)
     
     # Create DataFrame
-    df = pd.DataFrame(intraday_data)
+    df = pd.DataFrame(all_data)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
     
@@ -368,8 +388,8 @@ def fetch_historical_data(index_symbols=['^NSEI', '^BSESN'], api_key=None, acces
     
     return historical_data
 
-# Fetch Intraday Data using Upstox API
-def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_key=None, access_token=None, timeframe_minutes=15):
+# Fetch Intraday Data using Upstox API - updated to fetch 15 days of data
+def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_key=None, access_token=None, timeframe_minutes=15, days=15):
     ist = pytz.timezone('Asia/Kolkata')
     intraday_data = {}
     
@@ -391,7 +411,7 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
     
     for symbol in index_symbols:
         try:
-            st.write(f"Fetching intraday data for {symbol}")
+            st.write(f"Fetching intraday data for {symbol} (last {days} days)")
             
             # Determine if it's an index or stock
             if symbol.startswith('^'):
@@ -403,8 +423,8 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
             else:
                 # It's a stock
                 instrument_key = get_stock_instrument_key(symbol)
-                
-            # Determine date range
+            
+            # Determine date range - fetch last 15 days of data
             if sim_date:
                 sim_date_dt = datetime.strptime(sim_date.strip(), '%Y-%m-%d')
                 if sim_date_dt.weekday() >= 5:
@@ -413,32 +433,31 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 if sim_date_dt.date() > datetime.now().date():
                     st.error(f"{sim_date} is a future date, no data available.")
                     continue
-                start = sim_date_dt.replace(hour=9, minute=15).astimezone(ist)
+                
+                # For simulation, we want data from 15 days before the simulation date
+                start_date = sim_date_dt - timedelta(days=days)
+                # Adjust for weekends
+                while start_date.weekday() >= 5:
+                    start_date = start_date - timedelta(days=1)
+                
+                start = start_date.replace(hour=9, minute=15).astimezone(ist)
                 end = sim_date_dt.replace(hour=15, minute=30).astimezone(ist)
             else:
-                today = datetime.now().date()
-                if datetime.now().weekday() >= 5:
-                    st.error("Today is a weekend (not a trading day).")
-                    continue
+                # For live scanning, fetch last 15 days
+                end_date = datetime.now().astimezone(ist)
+                start_date = end_date - timedelta(days=days)
+                # Adjust for weekends
+                while start_date.weekday() >= 5:
+                    start_date = start_date - timedelta(days=1)
                 
-                # For intraday data, we need to fetch data from today
-                start = datetime.combine(today, time(9, 15)).astimezone(ist)
-                end = datetime.now().astimezone(ist)
-                
-                # If it's before market open, fetch yesterday's data
-                if datetime.now(pytz.timezone('Asia/Kolkata')).time() < time(9, 15):
-                    yesterday = today - timedelta(days=1)
-                    # If yesterday is weekend, go back to Friday
-                    while yesterday.weekday() >= 5:
-                        yesterday = yesterday - timedelta(days=1)
-                    start = datetime.combine(yesterday, time(9, 15)).astimezone(ist)
-                    end = datetime.combine(yesterday, time(15, 30)).astimezone(ist)
+                start = start_date.replace(hour=9, minute=15).astimezone(ist)
+                end = end_date
             
             # Format dates correctly for Upstox API
             to_date = end.strftime('%Y-%m-%d')
             from_date = start.strftime('%Y-%m-%d')
             
-            # Fetch 1-minute intraday data using the new endpoint
+            # Try to fetch intraday data using the new endpoint
             url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/1minute"
             
             try:
@@ -448,7 +467,7 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                     st.error(f"API returned status code {response.status_code} for {symbol}")
                     # Use sample data as fallback
                     st.info("Using sample data as fallback...")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes)
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
                     intraday_data[symbol] = df
                     continue
                     
@@ -458,7 +477,7 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                     st.error(f"No data returned for {symbol}")
                     # Use sample data as fallback
                     st.info("Using sample data as fallback...")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes)
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
                     intraday_data[symbol] = df
                     continue
                     
@@ -466,56 +485,11 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 candles = data['data']['candles']
                 if not candles:
                     st.error(f"No candles returned for {symbol}")
-                    
-                    # Try fetching previous day's data if current day returns empty
-                    if not sim_date:
-                        yesterday = datetime.now().date() - timedelta(days=1)
-                        # If yesterday is weekend, go back to Friday
-                        while yesterday.weekday() >= 5:
-                            yesterday = yesterday - timedelta(days=1)
-                        
-                        start = datetime.combine(yesterday, time(9, 15)).astimezone(ist)
-                        end = datetime.combine(yesterday, time(15, 30)).astimezone(ist)
-                        
-                        # Format dates correctly for Upstox API
-                        to_date = end.strftime('%Y-%m-%d')
-                        from_date = start.strftime('%Y-%m-%d')
-                        
-                        # Try fetching 1-minute intraday data for yesterday
-                        url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/1minute"
-                        
-                        try:
-                            response = requests.get(url, headers=headers, timeout=10)
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                if data and 'data' in data and 'candles' in data['data'] and data['data']['candles']:
-                                    candles = data['data']['candles']
-                                else:
-                                    st.error(f"No candles returned for {symbol} even for previous day")
-                                    # Use sample data as fallback
-                                    st.info("Using sample data as fallback...")
-                                    df = generate_sample_intraday_data(symbol, timeframe_minutes)
-                                    intraday_data[symbol] = df
-                                    continue
-                            else:
-                                st.error(f"API returned status code {response.status_code} for {symbol} when fetching previous day")
-                                # Use sample data as fallback
-                                st.info("Using sample data as fallback...")
-                                df = generate_sample_intraday_data(symbol, timeframe_minutes)
-                                intraday_data[symbol] = df
-                                continue
-                        except:
-                            st.error(f"Connection error when fetching previous day data for {symbol}. Using sample data as fallback...")
-                            df = generate_sample_intraday_data(symbol, timeframe_minutes)
-                            intraday_data[symbol] = df
-                            continue
-                    else:
-                        # Use sample data as fallback
-                        st.info("Using sample data as fallback...")
-                        df = generate_sample_intraday_data(symbol, timeframe_minutes)
-                        intraday_data[symbol] = df
-                        continue
+                    # Use sample data as fallback
+                    st.info("Using sample data as fallback...")
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+                    intraday_data[symbol] = df
+                    continue
                     
                 # Create DataFrame
                 df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
@@ -545,26 +519,31 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 # Ensure we have data for the full market hours
                 df = df.between_time('09:15', '15:30')
                 
+                # For simulation, filter to the simulation date if provided
+                if sim_date:
+                    sim_date_str = sim_date.strip()
+                    df = df[df.index.date == datetime.strptime(sim_date_str, '%Y-%m-%d').date()]
+                
                 st.success(f"Successfully fetched and converted {len(df)} rows of {timeframe_minutes}-minute intraday data for {symbol}")
                 intraday_data[symbol] = df
                 
             except requests.exceptions.ConnectionError:
                 st.error(f"Connection error when fetching intraday data for {symbol}. Using sample data as fallback...")
-                df = generate_sample_intraday_data(symbol, timeframe_minutes)
+                df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
                 intraday_data[symbol] = df
                 continue
                 
         except Exception as e:
             st.error(f"Error fetching intraday data for {symbol}: {e}")
             st.info("Using sample data as fallback...")
-            df = generate_sample_intraday_data(symbol, timeframe_minutes)
+            df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
             intraday_data[symbol] = df
             continue
     
     return intraday_data
 
-# Fetch stock data from Yahoo Finance
-def fetch_stock_data(symbol, period='1d', interval='1m'):
+# Fetch stock data from Yahoo Finance - updated to fetch 15 days of data
+def fetch_stock_data(symbol, period='15d', interval='1m'):
     try:
         # Append .NS suffix if not present
         if not symbol.endswith(('.NS', '.BO')):
@@ -604,44 +583,92 @@ def fetch_stock_data(symbol, period='1d', interval='1m'):
         st.error(f"Error fetching stock data for {symbol}: {e}")
         return None
 
-# Compute Indicators
+# Compute Indicators - updated to handle small datasets
 def compute_indicators(df, intraday=True):
     if df.empty or 'Close' not in df.columns:
         st.error("DataFrame is empty or missing 'Close' column.")
         return df
     
-    period_adx = 5 if intraday else 14
-    period_ema_short = 10 if intraday else 20
-    period_ema_long = 20 if intraday else 50
-    period_bb = 10 if intraday else 20
+    # Adjust window sizes based on available data
+    available_rows = len(df)
     
-    # Add Goverdhan's EMAs
-    period_ema9 = 9
-    period_ema21 = 21
-    
-    if len(df) < max(period_adx, period_ema9, period_ema21):
-        st.error(f"Insufficient data points ({len(df)} rows) for indicators (requires {max(period_adx, period_ema9, period_ema21)} rows).")
-        return df
+    if intraday:
+        # For intraday, we want at least 20 rows, but we'll adjust if we have less
+        period_adx = min(5, available_rows - 1) if available_rows > 1 else 1
+        period_ema_short = min(10, available_rows - 1) if available_rows > 1 else 1
+        period_ema_long = min(20, available_rows - 1) if available_rows > 1 else 1
+        period_bb = min(10, available_rows - 1) if available_rows > 1 else 1
+        period_ema9 = min(9, available_rows - 1) if available_rows > 1 else 1
+        period_ema21 = min(21, available_rows - 1) if available_rows > 1 else 1
+    else:
+        period_adx = min(14, available_rows - 1) if available_rows > 1 else 1
+        period_ema_short = min(20, available_rows - 1) if available_rows > 1 else 1
+        period_ema_long = min(50, available_rows - 1) if available_rows > 1 else 1
+        period_bb = min(20, available_rows - 1) if available_rows > 1 else 1
+        period_ema9 = min(9, available_rows - 1) if available_rows > 1 else 1
+        period_ema21 = min(21, available_rows - 1) if available_rows > 1 else 1
     
     df = df.copy()
-    df['EMA10'] = EMAIndicator(df['Close'], window=period_ema_short).ema_indicator()
-    df['EMA20'] = EMAIndicator(df['Close'], window=period_ema_long).ema_indicator()
-    df['ADX'] = ADXIndicator(df['High'], df['Low'], df['Close'], window=period_adx).adx()
-    df['ATR'] = AverageTrueRange(df['High'], df['Low'], df['Close'], window=period_adx).average_true_range()
-    df['VOL_AVG'] = df['Volume'].rolling(window=10).mean()
     
-    # Goverdhan's EMAs
-    df['EMA9'] = EMAIndicator(df['Close'], window=period_ema9).ema_indicator()
-    df['EMA21'] = EMAIndicator(df['Close'], window=period_ema21).ema_indicator()
-    
-    # Andrea Unger's Bollinger Bands
-    bb = BollingerBands(df['Close'], window=period_bb, window_dev=2)
-    df['BB_Upper'] = bb.bollinger_hband()
-    df['BB_Lower'] = bb.bollinger_lband()
-    df['BB_Mid'] = bb.bollinger_mavg()
-    
-    # Michael Cook's VWAP
-    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+    try:
+        # Calculate EMAs
+        if period_ema_short > 0:
+            df['EMA10'] = EMAIndicator(df['Close'], window=period_ema_short).ema_indicator()
+        else:
+            df['EMA10'] = np.nan
+            
+        if period_ema_long > 0:
+            df['EMA20'] = EMAIndicator(df['Close'], window=period_ema_long).ema_indicator()
+        else:
+            df['EMA20'] = np.nan
+        
+        # Calculate ADX
+        if period_adx > 0:
+            df['ADX'] = ADXIndicator(df['High'], df['Low'], df['Close'], window=period_adx).adx()
+        else:
+            df['ADX'] = np.nan
+            
+        # Calculate ATR
+        if period_adx > 0:
+            df['ATR'] = AverageTrueRange(df['High'], df['Low'], df['Close'], window=period_adx).average_true_range()
+        else:
+            df['ATR'] = np.nan
+            
+        # Calculate volume average
+        df['VOL_AVG'] = df['Volume'].rolling(window=10).mean()
+        
+        # Goverdhan's EMAs
+        if period_ema9 > 0:
+            df['EMA9'] = EMAIndicator(df['Close'], window=period_ema9).ema_indicator()
+        else:
+            df['EMA9'] = np.nan
+            
+        if period_ema21 > 0:
+            df['EMA21'] = EMAIndicator(df['Close'], window=period_ema21).ema_indicator()
+        else:
+            df['EMA21'] = np.nan
+        
+        # Andrea Unger's Bollinger Bands
+        if period_bb > 0:
+            bb = BollingerBands(df['Close'], window=period_bb, window_dev=2)
+            df['BB_Upper'] = bb.bollinger_hband()
+            df['BB_Lower'] = bb.bollinger_lband()
+            df['BB_Mid'] = bb.bollinger_mavg()
+        else:
+            df['BB_Upper'] = np.nan
+            df['BB_Lower'] = np.nan
+            df['BB_Mid'] = np.nan
+        
+        # Michael Cook's VWAP
+        # VWAP requires cumulative sum, so we need at least one row
+        if available_rows > 0:
+            df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+        else:
+            df['VWAP'] = np.nan
+        
+    except Exception as e:
+        st.error(f"Error computing indicators: {e}")
+        return df
     
     return df
 
@@ -1076,11 +1103,15 @@ def monitor_trade(df_intra, trade_type, entry_price, stop_loss, prev_strikes_oi,
     
     return warning, warning_message
 
-# Generate Signals with Target/Stop-Loss
+# Generate Signals with Target/Stop-Loss - updated to handle small datasets
 def generate_signals(df_intra, avg_band_pct, hist_atr_avg, index_symbol, simulation=False, prev_strikes_oi={}):
-    if len(df_intra) < 21:
-        st.error(f"Insufficient data ({len(df_intra)} rows) for signal generation for {index_symbol}.")
+    # Check if we have enough data
+    if len(df_intra) < 5:
+        st.error(f"Insufficient data ({len(df_intra)} rows) for signal generation for {index_symbol}. Need at least 5 rows.")
         return "Unknown", "No Signal", 0, 0, 0, False, {}, 0, "No Kell Signal", "No Goverdhan Signal", "No Unger Signal", "No Cook Signal", 0, 0, None, "Neutral"
+    
+    if len(df_intra) < 20:
+        st.warning(f"Only {len(df_intra)} rows of data available for {index_symbol}. Indicators may not be accurate.")
     
     df_intra = compute_indicators(df_intra)
     if df_intra.empty:
@@ -1261,16 +1292,17 @@ def format_signal_table(kell_signal, goverdhan_signal, unger_signal, cook_signal
     
     return styled_df
 
-# Simulate Day with Monitoring
+# Simulate Day with Monitoring - updated to use 15 days of data
 def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, api_key=None, access_token=None, timeframe_minutes=15):
-    intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date, api_key, access_token, timeframe_minutes)
+    # Fetch 15 days of intraday data
+    intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date, api_key, access_token, timeframe_minutes, days=15)
     
     for index_symbol, df_intra in intraday_data_dict.items():
         if df_intra.empty:
             st.warning(f"No intraday data for {index_symbol} on {sim_date}.")
             continue
         
-        if len(df_intra) < 21:
+        if len(df_intra) < 5:
             st.warning(f"Insufficient data for {index_symbol} on {sim_date} ({len(df_intra)} rows).")
             continue
         
@@ -1366,7 +1398,7 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
         st.dataframe(pd.DataFrame(results))
         st.success("Simulation completed.")
 
-# Simulate Date Range
+# Simulate Date Range - updated to use 15 days of data
 def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, api_key=None, access_token=None, timeframe_minutes=15):
     # Convert string dates to datetime objects
     start_date_dt = datetime.strptime(start_date.strip(), '%Y-%m-%d')
@@ -1382,14 +1414,15 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
         sim_date_str = sim_date.strftime('%Y-%m-%d')
         st.write(f"Simulating {sim_date_str}...")
         
-        intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date_str, api_key, access_token, timeframe_minutes)
+        # Fetch 15 days of intraday data
+        intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date_str, api_key, access_token, timeframe_minutes, days=15)
         
         for index_symbol, df_intra in intraday_data_dict.items():
             if df_intra.empty:
                 st.warning(f"No intraday data for {index_symbol} on {sim_date_str}.")
                 continue
             
-            if len(df_intra) < 21:
+            if len(df_intra) < 5:
                 st.warning(f"Insufficient data for {index_symbol} on {sim_date_str} ({len(df_intra)} rows).")
                 continue
             
@@ -1489,7 +1522,7 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
     else:
         st.warning("No results found for the selected date range.")
 
-# Thread function for live scanning
+# Thread function for live scanning - updated to use 15 days of data
 def live_scanning_thread():
     # Determine which symbols to scan
     symbols_to_scan = ['^NSEI', '^BSESN']
@@ -1526,12 +1559,12 @@ def live_scanning_thread():
     # Run the live scanning loop
     while st.session_state.live_scanning:
         if is_market_open():
-            # Fetch intraday data for indices
-            intraday_data_dict = fetch_intraday_data(['^NSEI', '^BSESN'], timeframe_minutes=st.session_state.timeframe_minutes)
+            # Fetch 15 days of intraday data for indices
+            intraday_data_dict = fetch_intraday_data(['^NSEI', '^BSESN'], timeframe_minutes=st.session_state.timeframe_minutes, days=15)
             
             # Fetch stock data if provided
             if st.session_state.stock_symbol:
-                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='1d', interval='1m')
+                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='15d', interval='1m')
                 if stock_data is not None and not stock_data.empty:
                     # Convert to desired timeframe
                     stock_data = convert_timeframe(stock_data, timeframe_minutes=st.session_state.timeframe_minutes)
@@ -1541,7 +1574,7 @@ def live_scanning_thread():
             results = []
             
             for symbol in symbols_to_scan:
-                if symbol in intraday_data_dict and len(intraday_data_dict[symbol]) >= 21:
+                if symbol in intraday_data_dict and len(intraday_data_dict[symbol]) >= 5:
                     state = symbol_states[symbol]
                     avg_band_pct = avg_band_pct_dict.get(symbol, 6.5)
                     hist_atr_avg = hist_atr_avg_dict.get(symbol, 0)
@@ -1865,8 +1898,8 @@ def main():
                 stock_symbol = st.text_input("Enter stock symbol (e.g., RELIANCE, TCS)", value="")
                 
                 if stock_symbol and st.button("Run Simulation"):
-                    # Fetch stock data for the selected date
-                    stock_data = fetch_stock_data(stock_symbol)
+                    # Fetch 15 days of stock data
+                    stock_data = fetch_stock_data(stock_symbol, period='15d', interval='1m')
                     
                     if stock_data is not None and not stock_data.empty:
                         # Compute indicators
@@ -2002,8 +2035,8 @@ def main():
                         sim_date_str = sim_date.strftime('%Y-%m-%d')
                         st.write(f"Processing {sim_date_str}...")
                         
-                        # Fetch stock data for the selected date
-                        stock_data = fetch_stock_data(stock_symbol)
+                        # Fetch 15 days of stock data
+                        stock_data = fetch_stock_data(stock_symbol, period='15d', interval='1m')
                         
                         if stock_data is not None and not stock_data.empty:
                             # Compute indicators
