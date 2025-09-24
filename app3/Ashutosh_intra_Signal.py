@@ -87,10 +87,10 @@ def convert_timeframe(df, timeframe_minutes=15):
     
     # Create a grouping key that rounds timestamps to the nearest interval
     df = df.copy()
-    df['time_group'] = df.index.floor(f'{timeframe_minutes}min')
+    df['resample_group'] = df.index.floor(f'{timeframe_minutes}min')
     
     # Group by the time interval and aggregate
-    resampled = df.groupby('time_group').agg({
+    resampled = df.groupby('resample_group').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
@@ -100,7 +100,9 @@ def convert_timeframe(df, timeframe_minutes=15):
         'VIX': 'last'
     })
     
-    # Drop the grouping column and return
+    # Reset index
+    resampled.index.name = 'timestamp'
+    
     return resampled
 
 # Generate sample data for testing when API is not available
