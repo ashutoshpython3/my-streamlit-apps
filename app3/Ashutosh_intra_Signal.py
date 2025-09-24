@@ -78,9 +78,6 @@ instrument_map = {
 
 # Map stock symbols to Upstox instrument keys format
 def get_stock_instrument_key(symbol):
-    # For NSE stocks: NSE_EQ|{ISIN}
-    # For BSE stocks: BSE_EQ|{ISIN}
-    # Since we don't have ISIN, we'll use a simplified approach
     return f"NSE_EQ|{symbol.upper()}"
 
 # Convert 1-minute data to desired timeframe (5 or 15 minutes)
@@ -2161,5 +2158,5 @@ def main():
                     else:
                         st.warning("No results found for the selected date range.")
 
-if __name__ == "__module__":
+if __name__ == "__main__":
     main()
