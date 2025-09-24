@@ -24,11 +24,21 @@ import threading
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Initialize pygame mixer for sound
-pygame.mixer.init()
+# Initialize pygame mixer for sound with error handling
+try:
+    pygame.mixer.init()
+    SOUND_AVAILABLE = True
+except:
+    # If pygame mixer initialization fails, set a flag to disable sound
+    SOUND_AVAILABLE = False
+    print("Warning: Audio device not available. Sound alerts will be disabled.")
 
 # Sound alert function with error handling - updated to use pygame
 def play_alert_sound(alert_type="alert"):
+    # Check if sound is available before trying to play
+    if not SOUND_AVAILABLE:
+        return
+    
     try:
         if alert_type == "alert":
             # Try to play the alert sound, but ignore if file not found
