@@ -853,9 +853,9 @@ def compute_cook_strategy(df):
     
     return df
 
-# Estimate Average Sideways Band Size
+# Estimate Average Sideways Band Size - Fixed to use correct parameter name
 def estimate_band_size(df_daily):
-    if df.empty:
+    if df_daily.empty:
         return 6.5, 0
     
     sideways_periods = []
