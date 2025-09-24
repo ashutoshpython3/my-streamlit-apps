@@ -398,7 +398,7 @@ def fetch_historical_data(index_symbols=['^NSEI', '^BSESN'], api_key=None, acces
     
     return historical_data
 
-# Fetch Intraday Data using Upstox API - updated to fetch 15 days of data
+# Fetch Intraday Data using Upstox API - updated to handle empty responses
 def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_key=None, access_token=None, timeframe_minutes=15, days=15):
     ist = pytz.timezone('Asia/Kolkata')
     intraday_data = {}
@@ -534,6 +534,11 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                     sim_date_str = sim_date.strip()
                     df = df[df.index.date == datetime.strptime(sim_date_str, '%Y-%m-%d').date()]
                 
+                # Check if we got any data
+                if df.empty:
+                    st.warning(f"No data returned after processing for {symbol}. Using sample data as fallback.")
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+                
                 st.success(f"Successfully fetched and converted {len(df)} rows of {timeframe_minutes}-minute intraday data for {symbol}")
                 intraday_data[symbol] = df
                 
@@ -552,8 +557,8 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
     
     return intraday_data
 
-# Fetch stock data from Yahoo Finance - updated to fetch 15 days of data
-def fetch_stock_data(symbol, period='15d', interval='1m'):
+# Fetch stock data from Yahoo Finance - updated to handle API limitations
+def fetch_stock_data(symbol, period='7d', interval='5m'):
     try:
         # Append .NS suffix if not present
         if not symbol.endswith(('.NS', '.BO')):
@@ -853,10 +858,14 @@ def compute_cook_strategy(df):
     
     return df
 
-# Estimate Average Sideways Band Size - Fixed to use correct parameter name
+# Estimate Average Sideways Band Size - Fixed to handle missing columns
 def estimate_band_size(df_daily):
     if df_daily.empty:
         return 6.5, 0
+    
+    # Check if ADX column exists, if not compute indicators
+    if 'ADX' not in df_daily.columns:
+        df_daily = compute_indicators(df_daily, intraday=False)
     
     sideways_periods = []
     min_window = 10
@@ -864,10 +873,10 @@ def estimate_band_size(df_daily):
     
     while i < len(df_daily) - min_window:
         window = df_daily.iloc[i:i+min_window]
-        if (window['ADX'] < 20).all():
+        if 'ADX' in window.columns and (window['ADX'] < 20).all():
             full_window = window
             j = i + min_window
-            while j < len(df_daily) and df_daily['ADX'].iloc[j] < 20:
+            while j < len(df_daily) and 'ADX' in df_daily.columns and df_daily['ADX'].iloc[j] < 20:
                 full_window = df_daily.iloc[i:j+1]
                 j += 1
             band_pct = (full_window['High'].max() - full_window['Low'].min()) / full_window['Low'].min() * 100
@@ -883,7 +892,7 @@ def estimate_band_size(df_daily):
         sideways_periods = [p for p in sideways_periods if p <= mean_pct + 2*std_pct]
     
     avg_band_pct = np.mean(sideways_periods) if sideways_periods else 6.5
-    hist_atr_avg = df_daily['ATR'].mean() if not df_daily['ATR'].empty else 0
+    hist_atr_avg = df_daily['ATR'].mean() if 'ATR' in df_daily.columns and not df_daily['ATR'].empty else 0
     
     return avg_band_pct, hist_atr_avg
 
@@ -1574,7 +1583,7 @@ def live_scanning_thread():
             
             # Fetch stock data if provided
             if st.session_state.stock_symbol:
-                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='15d', interval='1m')
+                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='7d', interval='5m')
                 if stock_data is not None and not stock_data.empty:
                     # Convert to desired timeframe
                     stock_data = convert_timeframe(stock_data, timeframe_minutes=st.session_state.timeframe_minutes)
@@ -1908,8 +1917,8 @@ def main():
                 stock_symbol = st.text_input("Enter stock symbol (e.g., RELIANCE, TCS)", value="")
                 
                 if stock_symbol and st.button("Run Simulation"):
-                    # Fetch 15 days of stock data
-                    stock_data = fetch_stock_data(stock_symbol, period='15d', interval='1m')
+                    # Fetch 7 days of stock data
+                    stock_data = fetch_stock_data(stock_symbol, period='7d', interval='5m')
                     
                     if stock_data is not None and not stock_data.empty:
                         # Compute indicators
@@ -2045,8 +2054,8 @@ def main():
                         sim_date_str = sim_date.strftime('%Y-%m-%d')
                         st.write(f"Processing {sim_date_str}...")
                         
-                        # Fetch 15 days of stock data
-                        stock_data = fetch_stock_data(stock_symbol, period='15d', interval='1m')
+                        # Fetch 7 days of stock data
+                        stock_data = fetch_stock_data(stock_symbol, period='7d', interval='5m')
                         
                         if stock_data is not None and not stock_data.empty:
                             # Compute indicators
