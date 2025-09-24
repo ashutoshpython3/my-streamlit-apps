@@ -6,12 +6,11 @@ import json
 from datetime import datetime, timedelta, time
 import pytz
 import os
-import argparse
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 import time as tm
 import warnings
-import pygame  # Replaced playsound with pygame
+from playsound import playsound
 import threading
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -20,43 +19,22 @@ from io import StringIO
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import websocket
-import threading
+import xlsxwriter
+from io import BytesIO
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Initialize pygame mixer for sound with error handling
-try:
-    pygame.mixer.init()
-    SOUND_AVAILABLE = True
-except:
-    # If pygame mixer initialization fails, set a flag to disable sound
-    SOUND_AVAILABLE = False
-    print("Warning: Audio device not available. Sound alerts will be disabled.")
-
-# Sound alert function with error handling - updated to use pygame
+# Sound alert function with error handling
 def play_alert_sound(alert_type="alert"):
-    # Check if sound is available before trying to play
-    if not SOUND_AVAILABLE:
-        return
-    
     try:
         if alert_type == "alert":
-            # Try to play the alert sound, but ignore if file not found
             try:
-                # Get the root directory (assuming assets is in the root)
-                root_dir = os.path.dirname(os.path.abspath(__file__))
-                alert_path = os.path.join(root_dir, "assets", "alert.mp3")
-                pygame.mixer.music.load(alert_path)
-                pygame.mixer.music.play()
+                playsound('alert.mp3')
             except:
                 pass
-        elif alert_type == "warning":
+        elif alert_type = "warning":
             try:
-                # Get the root directory (assuming assets is in the root)
-                root_dir = os.path.dirname(os.path.abspath(__file__))
-                warning_path = os.path.join(root_dir, "assets", "warning.mp3")
-                pygame.mixer.music.load(warning_path)
-                pygame.mixer.music.play()
+                playsound('warning.mp3')
             except:
                 pass
     except Exception as e:
@@ -78,9 +56,6 @@ instrument_map = {
 
 # Map stock symbols to Upstox instrument keys format
 def get_stock_instrument_key(symbol):
-    # For NSE stocks: NSE_EQ|{ISIN}
-    # For BSE stocks: BSE_EQ|{ISIN}
-    # Since we don't have ISIN, we'll use a simplified approach
     return f"NSE_EQ|{symbol.upper()}"
 
 # Convert 1-minute data to desired timeframe (5 or 15 minutes)
@@ -90,10 +65,10 @@ def convert_timeframe(df, timeframe_minutes=15):
     
     # Create a grouping key that rounds timestamps to the nearest interval
     df = df.copy()
-    df['time_group'] = df.index.floor(f'{timeframe_minutes}min')
+    df['resample_group'] = df.index.floor(f'{timeframe_minutes}min')
     
     # Group by the time interval and aggregate
-    resampled = df.groupby('time_group').agg({
+    resampled = df.groupby('resample_group').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
@@ -103,7 +78,9 @@ def convert_timeframe(df, timeframe_minutes=15):
         'VIX': 'last'
     })
     
-    # Drop the grouping column and return
+    # Reset index
+    resampled.index.name = 'timestamp'
+    
     return resampled
 
 # Generate sample data for testing when API is not available
@@ -165,60 +142,65 @@ def generate_sample_data(symbol='^NSEI', days=30):
     
     return df
 
-# Generate sample intraday data
-def generate_sample_intraday_data(symbol='^NSEI', timeframe_minutes=15, days=15):
+# Generate sample intraday data with date parameter for unique data
+def generate_sample_intraday_data(symbol='^NSEI', timeframe_minutes=15, sim_date=None):
     st.info(f"Generating sample intraday data for {symbol} for testing purposes...")
     
-    # Create date range for the last 15 days
-    end_date = datetime.now(pytz.timezone('Asia/Kolkata'))
-    start_date = end_date - timedelta(days=days)
+    # Create the specified date or today's date
+    if sim_date:
+        target_date = datetime.strptime(sim_date.strip(), '%Y-%m-%d').date()
+    else:
+        target_date = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     
-    # Create business day range
-    dates = pd.date_range(start=start_date, end=end_date, freq='B')
+    # Create timestamps for market hours (9:15 to 15:30)
+    start_time = datetime.combine(target_date, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
+    end_time = datetime.combine(target_date, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
     
-    all_data = []
+    # Create 1-minute timestamps
+    timestamps = pd.date_range(start=start_time, end=end_time, freq='1min')
     
-    for date in dates:
-        # Create timestamps for market hours (9:15 to 15:30)
-        start_time = datetime.combine(date, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
-        end_time = datetime.combine(date, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
+    # Generate sample price data with unique seed for each date
+    # Use the date as seed to ensure consistent but unique data for each date
+    date_seed = int(target_date.strftime('%Y%m%d'))
+    np.random.seed(date_seed)
+    
+    # Base price varies by symbol and date
+    if symbol == '^NSEI':
+        base_price = 19500 + (date_seed % 1000)  # Vary base price by date
+    elif symbol == '^BSESN':
+        base_price = 65000 + (date_seed % 2000)  # Vary base price by date
+    else:
+        base_price = 1000 + (date_seed % 500)  # For stocks
+    
+    intraday_data = []
+    current_price = base_price
+    
+    for timestamp in timestamps:
+        # 1-minute price change with some randomness
+        change = np.random.normal(0, 0.0005)  # Small change for 1 minute
+        open_price = current_price
+        close_price = current_price * (1 + change)
+        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0002)))
+        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0002)))
         
-        # Create 1-minute timestamps
-        timestamps = pd.date_range(start=start_time, end=end_time, freq='1min')
+        # Volume with some randomness
+        volume = int(np.random.normal(5000, 1000))
         
-        # Generate sample price data
-        np.random.seed(42)  # For reproducible results
-        base_price = 19500  # Approximate Nifty value
+        intraday_data.append({
+            'timestamp': timestamp,
+            'open': open_price,
+            'high': high_price,
+            'low': low_price,
+            'close': close_price,
+            'volume': volume,
+            'oi': np.random.randint(1000, 5000)
+        })
         
-        intraday_data = []
-        for timestamp in timestamps:
-            # 1-minute price change with some randomness
-            change = np.random.normal(0, 0.0005)  # Small change for 1 minute
-            open_price = base_price * (1 + change * 0.5)
-            close_price = base_price * (1 + change)
-            high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0002)))
-            low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0002)))
-            
-            # Volume with some randomness
-            volume = int(np.random.normal(5000, 1000))
-            
-            intraday_data.append({
-                'timestamp': timestamp,
-                'open': open_price,
-                'high': high_price,
-                'low': low_price,
-                'close': close_price,
-                'volume': volume,
-                'oi': np.random.randint(1000, 5000)
-            })
-            
-            # Update base price for next minute
-            base_price = close_price
-        
-        all_data.extend(intraday_data)
+        # Update current price for next minute
+        current_price = close_price
     
     # Create DataFrame
-    df = pd.DataFrame(all_data)
+    df = pd.DataFrame(intraday_data)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
     
@@ -398,8 +380,8 @@ def fetch_historical_data(index_symbols=['^NSEI', '^BSESN'], api_key=None, acces
     
     return historical_data
 
-# Fetch Intraday Data using Upstox API - updated to handle empty responses
-def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_key=None, access_token=None, timeframe_minutes=15, days=15):
+# Fetch Intraday Data using Upstox API
+def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_key=None, access_token=None, timeframe_minutes=15):
     ist = pytz.timezone('Asia/Kolkata')
     intraday_data = {}
     
@@ -421,7 +403,7 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
     
     for symbol in index_symbols:
         try:
-            st.write(f"Fetching intraday data for {symbol} (last {days} days)")
+            st.write(f"Fetching intraday data for {symbol}")
             
             # Determine if it's an index or stock
             if symbol.startswith('^'):
@@ -433,8 +415,8 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
             else:
                 # It's a stock
                 instrument_key = get_stock_instrument_key(symbol)
-            
-            # Determine date range - fetch last 15 days of data
+                
+            # Determine date range
             if sim_date:
                 sim_date_dt = datetime.strptime(sim_date.strip(), '%Y-%m-%d')
                 if sim_date_dt.weekday() >= 5:
@@ -443,31 +425,32 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 if sim_date_dt.date() > datetime.now().date():
                     st.error(f"{sim_date} is a future date, no data available.")
                     continue
-                
-                # For simulation, we want data from 15 days before the simulation date
-                start_date = sim_date_dt - timedelta(days=days)
-                # Adjust for weekends
-                while start_date.weekday() >= 5:
-                    start_date = start_date - timedelta(days=1)
-                
-                start = start_date.replace(hour=9, minute=15).astimezone(ist)
+                start = sim_date_dt.replace(hour=9, minute=15).astimezone(ist)
                 end = sim_date_dt.replace(hour=15, minute=30).astimezone(ist)
             else:
-                # For live scanning, fetch last 15 days
-                end_date = datetime.now().astimezone(ist)
-                start_date = end_date - timedelta(days=days)
-                # Adjust for weekends
-                while start_date.weekday() >= 5:
-                    start_date = start_date - timedelta(days=1)
+                today = datetime.now().date()
+                if datetime.now().weekday() >= 5:
+                    st.error("Today is a weekend (not a trading day).")
+                    continue
                 
-                start = start_date.replace(hour=9, minute=15).astimezone(ist)
-                end = end_date
+                # For intraday data, we need to fetch data from today
+                start = datetime.combine(today, time(9, 15)).astimezone(ist)
+                end = datetime.now().astimezone(ist)
+                
+                # If it's before market open, fetch yesterday's data
+                if datetime.now(pytz.timezone('Asia/Kolkata')).time() < time(9, 15):
+                    yesterday = today - timedelta(days=1)
+                    # If yesterday is weekend, go back to Friday
+                    while yesterday.weekday() >= 5:
+                        yesterday = yesterday - timedelta(days=1)
+                    start = datetime.combine(yesterday, time(9, 15)).astimezone(ist)
+                    end = datetime.combine(yesterday, time(15, 30)).astimezone(ist)
             
             # Format dates correctly for Upstox API
             to_date = end.strftime('%Y-%m-%d')
             from_date = start.strftime('%Y-%m-%d')
             
-            # Try to fetch intraday data using the new endpoint
+            # Fetch 1-minute intraday data using the new endpoint
             url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/1minute"
             
             try:
@@ -477,17 +460,17 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                     st.error(f"API returned status code {response.status_code} for {symbol}")
                     # Use sample data as fallback
                     st.info("Using sample data as fallback...")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
                     intraday_data[symbol] = df
                     continue
                     
                 data = response.json()
                 
-                if not data or 'data' not in data or 'candles' not in data['data']:
+                if not data or 'data' in data or 'candles' in data['data']:
                     st.error(f"No data returned for {symbol}")
                     # Use sample data as fallback
                     st.info("Using sample data as fallback...")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+                    df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
                     intraday_data[symbol] = df
                     continue
                     
@@ -495,11 +478,56 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 candles = data['data']['candles']
                 if not candles:
                     st.error(f"No candles returned for {symbol}")
-                    # Use sample data as fallback
-                    st.info("Using sample data as fallback...")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
-                    intraday_data[symbol] = df
-                    continue
+                    
+                    # Try fetching previous day's data if current day returns empty
+                    if not sim_date:
+                        yesterday = datetime.now().date() - timedelta(days=1)
+                        # If yesterday is weekend, go back to Friday
+                        while yesterday.weekday() >= 5:
+                            yesterday = yesterday - timedelta(days=1)
+                        
+                        start = datetime.combine(yesterday, time(9, 15)).astimezone(ist)
+                        end = datetime.combine(yesterday, time(15, 30)).astimezone(ist)
+                        
+                        # Format dates correctly for Upstox API
+                        to_date = end.strftime('%Y-%m-%d')
+                        from_date = start.strftime('%Y-%m-%d')
+                        
+                        # Try fetching 1-minute intraday data for yesterday
+                        url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/1minute"
+                        
+                        try:
+                            response = requests.get(url, headers=headers, timeout=10)
+                            
+                            if response.status_code == 200:
+                                data = response.json()
+                                if data and 'data' in data and 'candles' in data['data'] and data['data']['candles']:
+                                    candles = data['data']['candles']
+                                else:
+                                    st.error(f"No candles returned for {symbol} even for previous day")
+                                    # Use sample data as fallback
+                                    st.info("Using sample data as fallback...")
+                                    df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
+                                    intraday_data[symbol] = df
+                                    continue
+                            else:
+                                st.error(f"API returned status code {response.status_code} for {symbol} when fetching previous day")
+                                # Use sample data as fallback
+                                st.info("Using sample data as fallback...")
+                                df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
+                                intraday_data[symbol] = df
+                                continue
+                        except:
+                            st.error(f"Connection error when fetching previous day data for {symbol}. Using sample data as fallback...")
+                            df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
+                            intraday_data[symbol] = df
+                            continue
+                    else:
+                        # Use sample data as fallback
+                        st.info("Using sample data as fallback...")
+                        df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
+                        intraday_data[symbol] = df
+                        continue
                     
                 # Create DataFrame
                 df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
@@ -529,36 +557,26 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                 # Ensure we have data for the full market hours
                 df = df.between_time('09:15', '15:30')
                 
-                # For simulation, filter to the simulation date if provided
-                if sim_date:
-                    sim_date_str = sim_date.strip()
-                    df = df[df.index.date == datetime.strptime(sim_date_str, '%Y-%m-%d').date()]
-                
-                # Check if we got any data
-                if df.empty:
-                    st.warning(f"No data returned after processing for {symbol}. Using sample data as fallback.")
-                    df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
-                
                 st.success(f"Successfully fetched and converted {len(df)} rows of {timeframe_minutes}-minute intraday data for {symbol}")
                 intraday_data[symbol] = df
                 
             except requests.exceptions.ConnectionError:
                 st.error(f"Connection error when fetching intraday data for {symbol}. Using sample data as fallback...")
-                df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+                df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
                 intraday_data[symbol] = df
                 continue
                 
         except Exception as e:
             st.error(f"Error fetching intraday data for {symbol}: {e}")
             st.info("Using sample data as fallback...")
-            df = generate_sample_intraday_data(symbol, timeframe_minutes, days)
+            df = generate_sample_intraday_data(symbol, timeframe_minutes, sim_date)
             intraday_data[symbol] = df
             continue
     
     return intraday_data
 
-# Fetch stock data from Yahoo Finance - updated to handle API limitations
-def fetch_stock_data(symbol, period='7d', interval='5m'):
+# Fetch stock data from Yahoo Finance
+def fetch_stock_data(symbol, period='1d', interval='1m'):
     try:
         # Append .NS suffix if not present
         if not symbol.endswith(('.NS', '.BO')):
@@ -598,92 +616,40 @@ def fetch_stock_data(symbol, period='7d', interval='5m'):
         st.error(f"Error fetching stock data for {symbol}: {e}")
         return None
 
-# Compute Indicators - updated to handle small datasets
+# Compute Indicators
 def compute_indicators(df, intraday=True):
     if df.empty or 'Close' not in df.columns:
         st.error("DataFrame is empty or missing 'Close' column.")
         return df
     
-    # Adjust window sizes based on available data
-    available_rows = len(df)
+    period_adx = 5 if intraday else 14
+    period_ema_short = 10 if intraday else 20
+    period_ema_long = 20 if intraday else 50
+    period_bb = 10 if intraday else 20
     
-    if intraday:
-        # For intraday, we want at least 20 rows, but we'll adjust if we have less
-        period_adx = min(5, available_rows - 1) if available_rows > 1 else 1
-        period_ema_short = min(10, available_rows - 1) if available_rows > 1 else 1
-        period_ema_long = min(20, available_rows - 1) if available_rows > 1 else 1
-        period_bb = min(10, available_rows - 1) if available_rows > 1 else 1
-        period_ema9 = min(9, available_rows - 1) if available_rows > 1 else 1
-        period_ema21 = min(21, available_rows - 1) if available_rows > 1 else 1
-    else:
-        period_adx = min(14, available_rows - 1) if available_rows > 1 else 1
-        period_ema_short = min(20, available_rows - 1) if available_rows > 1 else 1
-        period_ema_long = min(50, available_rows - 1) if available_rows > 1 else 1
-        period_bb = min(20, available_rows - 1) if available_rows > 1 else 1
-        period_ema9 = min(9, available_rows - 1) if available_rows > 1 else 1
-        period_ema21 = min(21, available_rows - 1) if available_rows > 1 else 1
+    # Add Goverdhan's EMAs
+    period_ema9 = 9
+    period_ema21 = 21
     
     df = df.copy()
+    df['EMA10'] = EMAIndicator(df['Close'], window=period_ema_short).ema_indicator()
+    df['EMA20'] = EMAIndicator(df['Close'], window=period_ema_long).ema_indicator()
+    df['ADX'] = ADXIndicator(df['High'], df['Low', 'Close'], window=period_adx).adx()
+    df['ATR'] = AverageTrueRange(df['High'], df['Low'], df['Close'], window=period_adx).average_true_range()
+    df['VOL_AVG'] = df['Volume'].rolling(window=10).mean()
     
-    try:
-        # Calculate EMAs
-        if period_ema_short > 0:
-            df['EMA10'] = EMAIndicator(df['Close'], window=period_ema_short).ema_indicator()
-        else:
-            df['EMA10'] = np.nan
-            
-        if period_ema_long > 0:
-            df['EMA20'] = EMAIndicator(df['Close'], window=period_ema_long).ema_indicator()
-        else:
-            df['EMA20'] = np.nan
-        
-        # Calculate ADX
-        if period_adx > 0:
-            df['ADX'] = ADXIndicator(df['High'], df['Low'], df['Close'], window=period_adx).adx()
-        else:
-            df['ADX'] = np.nan
-            
-        # Calculate ATR
-        if period_adx > 0:
-            df['ATR'] = AverageTrueRange(df['High'], df['Low'], df['Close'], window=period_adx).average_true_range()
-        else:
-            df['ATR'] = np.nan
-            
-        # Calculate volume average
-        df['VOL_AVG'] = df['Volume'].rolling(window=10).mean()
-        
-        # Goverdhan's EMAs
-        if period_ema9 > 0:
-            df['EMA9'] = EMAIndicator(df['Close'], window=period_ema9).ema_indicator()
-        else:
-            df['EMA9'] = np.nan
-            
-        if period_ema21 > 0:
-            df['EMA21'] = EMAIndicator(df['Close'], window=period_ema21).ema_indicator()
-        else:
-            df['EMA21'] = np.nan
-        
-        # Andrea Unger's Bollinger Bands
-        if period_bb > 0:
-            bb = BollingerBands(df['Close'], window=period_bb, window_dev=2)
-            df['BB_Upper'] = bb.bollinger_hband()
-            df['BB_Lower'] = bb.bollinger_lband()
-            df['BB_Mid'] = bb.bollinger_mavg()
-        else:
-            df['BB_Upper'] = np.nan
-            df['BB_Lower'] = np.nan
-            df['BB_Mid'] = np.nan
-        
-        # Michael Cook's VWAP
-        # VWAP requires cumulative sum, so we need at least one row
-        if available_rows > 0:
-            df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
-        else:
-            df['VWAP'] = np.nan
-        
-    except Exception as e:
-        st.error(f"Error computing indicators: {e}")
-        return df
+    # Goverdhan's EMAs
+    df['EMA9'] = EMAIndicator(df['Close'], window=period_ema9).ema_indicator()
+    df['EMA21'] = EMAIndicator(df['Close'], window=period_ema21).ema_indicator()
+    
+    # Andrea Unger's Bollinger Bands
+    bb = BollingerBands(df['Close'], window=period_bb, window_dev=2)
+    df['BB_Upper'] = bb.bollinger_hband()
+    df['BB_Lower'] = bb.bollinger_lband()
+    df['BB_Mid'] = bb.bollinger_mavg()
+    
+    # Michael Cook's VWAP
+    df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
     
     return df
 
@@ -858,14 +824,10 @@ def compute_cook_strategy(df):
     
     return df
 
-# Estimate Average Sideways Band Size - Fixed to handle missing columns
+# Estimate Average Sideways Band Size
 def estimate_band_size(df_daily):
     if df_daily.empty:
         return 6.5, 0
-    
-    # Check if ADX column exists, if not compute indicators
-    if 'ADX' not in df_daily.columns:
-        df_daily = compute_indicators(df_daily, intraday=False)
     
     sideways_periods = []
     min_window = 10
@@ -873,10 +835,10 @@ def estimate_band_size(df_daily):
     
     while i < len(df_daily) - min_window:
         window = df_daily.iloc[i:i+min_window]
-        if 'ADX' in window.columns and (window['ADX'] < 20).all():
+        if (window['ADX'] < 20).all():
             full_window = window
             j = i + min_window
-            while j < len(df_daily) and 'ADX' in df_daily.columns and df_daily['ADX'].iloc[j] < 20:
+            while j < len(df_daily) and df_daily['ADX'].iloc[j] < 20:
                 full_window = df_daily.iloc[i:j+1]
                 j += 1
             band_pct = (full_window['High'].max() - full_window['Low'].min()) / full_window['Low'].min() * 100
@@ -892,7 +854,7 @@ def estimate_band_size(df_daily):
         sideways_periods = [p for p in sideways_periods if p <= mean_pct + 2*std_pct]
     
     avg_band_pct = np.mean(sideways_periods) if sideways_periods else 6.5
-    hist_atr_avg = df_daily['ATR'].mean() if 'ATR' in df_daily.columns and not df_daily['ATR'].empty else 0
+    hist_atr_avg = df_daily['ATR'].mean() if not df_daily['ATR'].empty else 0
     
     return avg_band_pct, hist_atr_avg
 
@@ -903,8 +865,6 @@ def fetch_option_chain(current_price, simulation=False, symbol='NIFTY', is_stock
     
     try:
         if is_stock:
-            # For stocks, we'll use a simplified approach
-            # In a real implementation, you would fetch from NSE or other sources
             return {
                 current_price * 0.98: {'CE_OI': 10000, 'PE_OI': 5000},
                 current_price: {'CE_OI': 8000, 'PE_OI': 12000},
@@ -1122,15 +1082,11 @@ def monitor_trade(df_intra, trade_type, entry_price, stop_loss, prev_strikes_oi,
     
     return warning, warning_message
 
-# Generate Signals with Target/Stop-Loss - updated to handle small datasets
+# Generate Signals with Target/Stop-Loss
 def generate_signals(df_intra, avg_band_pct, hist_atr_avg, index_symbol, simulation=False, prev_strikes_oi={}):
-    # Check if we have enough data
-    if len(df_intra) < 5:
-        st.error(f"Insufficient data ({len(df_intra)} rows) for signal generation for {index_symbol}. Need at least 5 rows.")
+    if len(df_intra) < 21:
+        st.error(f"Insufficient data ({len(df_intra)} rows) for signal generation for {index_symbol}.")
         return "Unknown", "No Signal", 0, 0, 0, False, {}, 0, "No Kell Signal", "No Goverdhan Signal", "No Unger Signal", "No Cook Signal", 0, 0, None, "Neutral"
-    
-    if len(df_intra) < 20:
-        st.warning(f"Only {len(df_intra)} rows of data available for {index_symbol}. Indicators may not be accurate.")
     
     df_intra = compute_indicators(df_intra)
     if df_intra.empty:
@@ -1267,12 +1223,12 @@ def get_signal_color(signal):
 
 # Get background color for sentiment
 def get_sentiment_bg_color(sentiment):
-    if "Bullish" in sentiment or "Long" in sentiment:
+    if "Bullish" in sentiment or "Long" in sentiment or "Buy CE" in sentiment:
         return "#90EE90"  # Light green
-    elif "Bearish" in sentiment or "Short" in sentiment:
+    elif "Bearish" in sentiment or "Short" in sentiment or "Buy PE" in sentiment:
         return "#FFB6C1"  # Light red
     else:
-        return "#FFFFE0"  # Light yellow
+        return "#FFFFE0"  # Light yellow for neutral/sideways
 
 # Format signal output as a table with background colors
 def format_signal_table(kell_signal, goverdhan_signal, unger_signal, cook_signal, option_sentiment, final_signal, target, stop_loss):
@@ -1311,17 +1267,49 @@ def format_signal_table(kell_signal, goverdhan_signal, unger_signal, cook_signal
     
     return styled_df
 
-# Simulate Day with Monitoring - updated to use 15 days of data
+# Create Excel file with signal data
+def create_excel_file(data):
+    output = BytesIO()
+    
+    # Convert data to DataFrame
+    df = pd.DataFrame(data)
+    
+    # Create Excel file using pandas to_excel with xlsxwriter engine
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Signals', index=False)
+        
+        # Get the xlsxwriter workbook and worksheet objects
+        workbook = writer.book
+        worksheet = writer.sheets['Signals']
+        
+        # Add some formatting
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'top',
+            'fg_color': '#D7E4BC',
+            'border': 1
+        })
+        
+        # Write the column headers with the defined format
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+    
+    # Reset the buffer's position to the beginning
+    output.seek(0)
+    
+    return output
+
+# Simulate Day with Monitoring
 def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, api_key=None, access_token=None, timeframe_minutes=15):
-    # Fetch 15 days of intraday data
-    intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date, api_key, access_token, timeframe_minutes, days=15)
+    intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date, api_key, access_token, timeframe_minutes)
     
     for index_symbol, df_intra in intraday_data_dict.items():
         if df_intra.empty:
             st.warning(f"No intraday data for {index_symbol} on {sim_date}.")
             continue
         
-        if len(df_intra) < 5:
+        if len(df_intra) < 21:
             st.warning(f"Insufficient data for {index_symbol} on {sim_date} ({len(df_intra)} rows).")
             continue
         
@@ -1417,7 +1405,7 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
         st.dataframe(pd.DataFrame(results))
         st.success("Simulation completed.")
 
-# Simulate Date Range - updated to use 15 days of data
+# Simulate Date Range
 def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, api_key=None, access_token=None, timeframe_minutes=15):
     # Convert string dates to datetime objects
     start_date_dt = datetime.strptime(start_date.strip(), '%Y-%m-%d')
@@ -1427,21 +1415,20 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
     date_range = pd.date_range(start=start_date_dt, end=end_date_dt, freq='B')  # Business days only
     
     # Create a DataFrame to store all results
-    all_results = pd.DataFrame()
+    all_results = []
     
     for sim_date in date_range:
         sim_date_str = sim_date.strftime('%Y-%m-%d')
         st.write(f"Simulating {sim_date_str}...")
         
-        # Fetch 15 days of intraday data
-        intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date_str, api_key, access_token, timeframe_minutes, days=15)
+        intraday_data_dict = fetch_intraday_data(list(df_daily_dict.keys()), sim_date_str, api_key, access_token, timeframe_minutes)
         
         for index_symbol, df_intra in intraday_data_dict.items():
             if df_intra.empty:
                 st.warning(f"No intraday data for {index_symbol} on {sim_date_str}.")
                 continue
             
-            if len(df_intra) < 5:
+            if len(df_intra) < 21:
                 st.warning(f"Insufficient data for {index_symbol} on {sim_date_str} ({len(df_intra)} rows).")
                 continue
             
@@ -1463,6 +1450,7 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
             avg_band_pct = avg_band_pct_dict.get(index_symbol, 6.5)
             hist_atr_avg = hist_atr_avg_dict.get(index_symbol, 0)
             
+            # Process all time intervals from 9:15 AM to 3:30 PM
             for i in range(21, len(df_intra)):
                 df_slice = df_intra.iloc[:i+1]
                 bar_time = df_slice.index[-1].strftime('%H:%M')
@@ -1491,8 +1479,7 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
                     'Option Sentiment': option_sentiment
                 }
                 
-                # Add to all results
-                all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
+                all_results.append(result_row)
                 
                 warning, warning_message = False, ""
                 if active_trade:
@@ -1535,13 +1522,27 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
                 prev_strikes_oi = {}
     
     # Display all results as a table
-    if not all_results.empty:
-        st.dataframe(all_results)
+    if all_results:
+        results_df = pd.DataFrame(all_results)
+        st.dataframe(results_df)
+        
+        # Create Excel file and provide download button
+        try:
+            excel_file = create_excel_file(all_results)
+            st.download_button(
+                label="Download Excel File",
+                data=excel_file,
+                file_name=f"simulation_results_{start_date}_to_{end_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Error creating Excel file: {e}")
+        
         st.success("Simulation completed.")
     else:
         st.warning("No results found for the selected date range.")
 
-# Thread function for live scanning - updated to use 15 days of data
+# Thread function for live scanning
 def live_scanning_thread():
     # Determine which symbols to scan
     symbols_to_scan = ['^NSEI', '^BSESN']
@@ -1575,25 +1576,28 @@ def live_scanning_thread():
             'prev_strikes_oi': {}
         }
     
+    # Cumulative results
+    if 'cumulative_live_results' not in st.session_state:
+        st.session_state.cumulative_live_results = []
+    
     # Run the live scanning loop
     while st.session_state.live_scanning:
         if is_market_open():
-            # Fetch 15 days of intraday data for indices
+            # Fetch intraday data for indices - fetch last 15 days
             intraday_data_dict = fetch_intraday_data(['^NSEI', '^BSESN'], timeframe_minutes=st.session_state.timeframe_minutes, days=15)
             
             # Fetch stock data if provided
             if st.session_state.stock_symbol:
-                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='7d', interval='5m')
+                stock_data = fetch_stock_data(st.session_state.stock_symbol, period='7d', interval='1m')
                 if stock_data is not None and not stock_data.empty:
-                    # Convert to desired timeframe
                     stock_data = convert_timeframe(stock_data, timeframe_minutes=st.session_state.timeframe_minutes)
                     intraday_data_dict[st.session_state.stock_symbol] = stock_data
             
-            # Create a DataFrame to display the results
+            # Create a list for this cycle's results
             results = []
             
             for symbol in symbols_to_scan:
-                if symbol in intraday_data_dict and len(intraday_data_dict[symbol]) >= 5:
+                if symbol in intraday_data_dict and len(intraday_data_dict[symbol]) >= 21:
                     state = symbol_states[symbol]
                     avg_band_pct = avg_band_pct_dict.get(symbol, 6.5)
                     hist_atr_avg = hist_atr_avg_dict.get(symbol, 0)
@@ -1604,16 +1608,16 @@ def live_scanning_thread():
                     
                     # Add to results
                     results.append({
+                        'Date': datetime.now().strftime('%Y-%m-%d'),
+                        'Time': datetime.now().strftime('%I:%M %p'),
                         'Symbol': symbol,
-                        'Time': datetime.now().strftime('%I:%M:%S %p'),
                         'Price': current_price,
                         'Signal': signal,
-                        'VIX': vix,
-                        'Option Sentiment': option_sentiment,
                         'Kell Signal': kell_signal,
                         'Goverdhan Signal': goverdhan_signal,
                         'Unger Signal': unger_signal,
                         'Cook Signal': cook_signal,
+                        'Option Sentiment': option_sentiment,
                         'Target': target,
                         'Stop Loss': stop_loss
                     })
@@ -1630,45 +1634,15 @@ def live_scanning_thread():
                         state['trade_entry_price'] = current_price
                         state['stop_loss'] = stop_loss
                         
-                        # Store the new trade in session state for display
-                        new_trade = {
-                            'time': datetime.now().strftime('%I:%M:%S %p'),
-                            'symbol': symbol,
-                            'current_price': current_price,
-                            'direction': direction,
-                            'signal': signal,
-                            'upper': upper,
-                            'lower': lower,
-                            'vix': vix,
-                            'bearish_oi': bearish_oi,
-                            'option_sentiment': option_sentiment,
-                            'kell_phase': intraday_data_dict[symbol].iloc[-1]['PHASE'],
-                            'goverdhan_patterns': ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if intraday_data_dict[symbol].iloc[-1][p]]),
-                            'unger_signal': intraday_data_dict[symbol].iloc[-1]['UNGER_SIGNAL'],
-                            'cook_signal': intraday_data_dict[symbol].iloc[-1]['COOK_SIGNAL'],
-                            'buildups': buildups,
-                            'target': target,
-                            'stop_loss': stop_loss,
-                            'kell_signal': kell_signal,
-                            'goverdhan_signal': goverdhan_signal,
-                            'unger_signal': unger_signal,
-                            'cook_signal': cook_signal
-                        }
-                        
-                        # Add to session state
-                        if 'new_trades' not in st.session_state:
-                            st.session_state.new_trades = []
-                        st.session_state.new_trades.append(new_trade)
-                        
                         # Play sound alert
                         play_alert_sound("alert")
                     
                     state['prev_strikes_oi'] = {}
             
-            # Update session state with results
-            st.session_state.live_results = results
+            # Append to cumulative results
+            st.session_state.cumulative_live_results.extend(results)
             
-            # Sleep for a short interval before next update
+            # Sleep for the timeframe interval
             tm.sleep(st.session_state.timeframe_minutes * 60)
         else:
             # Update session state with market closed message
@@ -1855,6 +1829,20 @@ def main():
                 
                 # Clear new trades after displaying
                 st.session_state.new_trades = []
+            
+            # Display Excel download button for live results
+            if st.session_state.live_results:
+                # Create Excel file and provide download button
+                try:
+                    excel_file = create_excel_file(st.session_state.live_results)
+                    st.download_button(
+                        label="Download Live Results as Excel",
+                        data=excel_file,
+                        file_name=f"live_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as e:
+                    st.error(f"Error creating Excel file: {e}")
         
         # Display market status
         if st.session_state.market_closed:
@@ -1918,7 +1906,7 @@ def main():
                 
                 if stock_symbol and st.button("Run Simulation"):
                     # Fetch 7 days of stock data
-                    stock_data = fetch_stock_data(stock_symbol, period='7d', interval='5m')
+                    stock_data = fetch_stock_data(stock_symbol, period='7d', interval='1m')
                     
                     if stock_data is not None and not stock_data.empty:
                         # Compute indicators
@@ -2048,14 +2036,14 @@ def main():
                     date_range = pd.date_range(start=start_date_dt, end=end_date_dt, freq='B')  # Business days only
                     
                     # Create a DataFrame to store all results
-                    all_results = pd.DataFrame()
+                    all_results = []
                     
                     for sim_date in date_range:
                         sim_date_str = sim_date.strftime('%Y-%m-%d')
                         st.write(f"Processing {sim_date_str}...")
                         
-                        # Fetch 7 days of stock data
-                        stock_data = fetch_stock_data(stock_symbol, period='7d', interval='5m')
+                        # Fetch stock data for the selected date
+                        stock_data = fetch_stock_data(stock_symbol, period='7d', interval='1m')
                         
                         if stock_data is not None and not stock_data.empty:
                             # Compute indicators
@@ -2093,8 +2081,7 @@ def main():
                                     'Option Sentiment': option_sentiment
                                 }
                                 
-                                # Add to all results
-                                all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
+                                all_results.append(result_row)
                                 
                                 if signal != "No Signal":
                                     st.subheader(f"*** NEW TRADE ***")
@@ -2125,11 +2112,27 @@ def main():
                                     play_alert_sound("alert")
                     
                     # Display all results as a table
-                    if not all_results.empty:
-                        st.dataframe(all_results)
+                    if all_results:
+                        results_df = pd.DataFrame(all_results)
+                        st.dataframe(results_df)
+                        
+                        # Create Excel file and provide download button
+                        try:
+                            excel_file = create_excel_file(all_results)
+                            st.download_button(
+                                label="Download Excel File",
+                                data=excel_file,
+                                file_name=f"simulation_results_{start_date}_to_{end_date}_{stock_symbol}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        except Exception as e:
+                            st.error(f"Error creating Excel file: {e}")
+                        
                         st.success("Simulation completed.")
                     else:
                         st.warning("No results found for the selected date range.")
+                else:
+                    st.error(f"No data found for {stock_symbol}")
 
 if __name__ == "__main__":
     main()
