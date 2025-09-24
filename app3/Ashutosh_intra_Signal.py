@@ -32,7 +32,7 @@ def play_alert_sound(alert_type="alert"):
                 playsound('alert.mp3')
             except:
                 pass
-        elif alert_type = "warning":
+        elif alert_type == "warning":
             try:
                 playsound('warning.mp3')
             except:
@@ -466,7 +466,7 @@ def fetch_intraday_data(index_symbols=['^NSEI', '^BSESN'], sim_date=None, api_ke
                     
                 data = response.json()
                 
-                if not data or 'data' in data or 'candles' in data['data']:
+                if not data or 'data' not in data or 'candles' not in data['data']:
                     st.error(f"No data returned for {symbol}")
                     # Use sample data as fallback
                     st.info("Using sample data as fallback...")
@@ -631,10 +631,14 @@ def compute_indicators(df, intraday=True):
     period_ema9 = 9
     period_ema21 = 21
     
+    if len(df) < max(period_adx, period_ema9, period_ema21):
+        st.error(f"Insufficient data points ({len(df)} rows) for indicators (requires {max(period_adx, period_ema9, period_ema21)} rows).")
+        return df
+    
     df = df.copy()
     df['EMA10'] = EMAIndicator(df['Close'], window=period_ema_short).ema_indicator()
     df['EMA20'] = EMAIndicator(df['Close'], window=period_ema_long).ema_indicator()
-    df['ADX'] = ADXIndicator(df['High'], df['Low', 'Close'], window=period_adx).adx()
+    df['ADX'] = ADXIndicator(df['High'], df['Low'], df['Close'], window=period_adx).adx()
     df['ATR'] = AverageTrueRange(df['High'], df['Low'], df['Close'], window=period_adx).average_true_range()
     df['VOL_AVG'] = df['Volume'].rolling(window=10).mean()
     
@@ -865,6 +869,8 @@ def fetch_option_chain(current_price, simulation=False, symbol='NIFTY', is_stock
     
     try:
         if is_stock:
+            # For stocks, we'll use a simplified approach
+            # In a real implementation, you would fetch from NSE or other sources
             return {
                 current_price * 0.98: {'CE_OI': 10000, 'PE_OI': 5000},
                 current_price: {'CE_OI': 8000, 'PE_OI': 12000},
@@ -1223,12 +1229,12 @@ def get_signal_color(signal):
 
 # Get background color for sentiment
 def get_sentiment_bg_color(sentiment):
-    if "Bullish" in sentiment or "Long" in sentiment or "Buy CE" in sentiment:
+    if "Bullish" in sentiment or "Long" in sentiment:
         return "#90EE90"  # Light green
-    elif "Bearish" in sentiment or "Short" in sentiment or "Buy PE" in sentiment:
+    elif "Bearish" in sentiment or "Short" in sentiment:
         return "#FFB6C1"  # Light red
     else:
-        return "#FFFFE0"  # Light yellow for neutral/sideways
+        return "#FFFFE0"  # Light yellow
 
 # Format signal output as a table with background colors
 def format_signal_table(kell_signal, goverdhan_signal, unger_signal, cook_signal, option_sentiment, final_signal, target, stop_loss):
@@ -2131,8 +2137,6 @@ def main():
                         st.success("Simulation completed.")
                     else:
                         st.warning("No results found for the selected date range.")
-                else:
-                    st.error(f"No data found for {stock_symbol}")
 
 if __name__ == "__main__":
     main()
