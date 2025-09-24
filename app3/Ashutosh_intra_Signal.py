@@ -10,7 +10,7 @@ from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 import time as tm
 import warnings
-from playsound import playsound
+import pygame  # Replaced playsound with pygame
 import threading
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -24,17 +24,39 @@ from io import BytesIO
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Sound alert function with error handling
+# Initialize pygame mixer for sound with error handling
+try:
+    pygame.mixer.init()
+    SOUND_AVAILABLE = True
+except:
+    # If pygame mixer initialization fails, set a flag to disable sound
+    SOUND_AVAILABLE = False
+    print("Warning: Audio device not available. Sound alerts will be disabled.")
+
+# Sound alert function with error handling - updated to use pygame
 def play_alert_sound(alert_type="alert"):
+    # Check if sound is available before trying to play
+    if not SOUND_AVAILABLE:
+        return
+    
     try:
         if alert_type == "alert":
+            # Try to play the alert sound, but ignore if file not found
             try:
-                playsound('alert.mp3')
+                # Get the root directory (assuming assets is in the root)
+                root_dir = os.path.dirname(os.path.abspath(__file__))
+                alert_path = os.path.join(root_dir, "assets", "alert.mp3")
+                pygame.mixer.music.load(alert_path)
+                pygame.mixer.music.play()
             except:
                 pass
         elif alert_type == "warning":
             try:
-                playsound('warning.mp3')
+                # Get the root directory (assuming assets is in the root)
+                root_dir = os.path.dirname(os.path.abspath(__file__))
+                warning_path = os.path.join(root_dir, "assets", "warning.mp3")
+                pygame.mixer.music.load(warning_path)
+                pygame.mixer.music.play()
             except:
                 pass
     except Exception as e:
@@ -56,6 +78,9 @@ instrument_map = {
 
 # Map stock symbols to Upstox instrument keys format
 def get_stock_instrument_key(symbol):
+    # For NSE stocks: NSE_EQ|{ISIN}
+    # For BSE stocks: BSE_EQ|{ISIN}
+    # Since we don't have ISIN, we'll use a simplified approach
     return f"NSE_EQ|{symbol.upper()}"
 
 # Convert 1-minute data to desired timeframe (5 or 15 minutes)
@@ -65,10 +90,10 @@ def convert_timeframe(df, timeframe_minutes=15):
     
     # Create a grouping key that rounds timestamps to the nearest interval
     df = df.copy()
-    df['resample_group'] = df.index.floor(f'{timeframe_minutes}min')
+    df['time_group'] = df.index.floor(f'{timeframe_minutes}min')
     
     # Group by the time interval and aggregate
-    resampled = df.groupby('resample_group').agg({
+    resampled = df.groupby('time_group').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
@@ -78,9 +103,7 @@ def convert_timeframe(df, timeframe_minutes=15):
         'VIX': 'last'
     })
     
-    # Reset index
-    resampled.index.name = 'timestamp'
-    
+    # Drop the grouping column and return
     return resampled
 
 # Generate sample data for testing when API is not available
@@ -2138,5 +2161,5 @@ def main():
                     else:
                         st.warning("No results found for the selected date range.")
 
-if __name__ == "__main__":
+if __name__ == "__module__":
     main()
