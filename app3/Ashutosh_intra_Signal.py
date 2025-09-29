@@ -919,23 +919,25 @@ def format_time_12h(time_str):
 
 # Get color for signal type
 def get_signal_color(signal):
-    if "Buy CE" in signal or "Long" in signal:
-        return "background-color: #90EE90"
-    elif "Buy PE" in signal or "Short" in signal:
-        return "background-color: #FFB6C1"
-    else:
-        return "background-color: #FFFFE0"
+    if isinstance(signal, str):
+        if "Buy CE" in signal or "Long" in signal:
+            return 'background-color: #90EE90'
+        elif "Buy PE" in signal or "Short" in signal:
+            return 'background-color: #FFB6C1'
+        else:
+            return 'background-color: #FFFFE0'
+    return 'background-color: #FFFFE0'
 
 # Format signal output as a table with background colors
 def format_signal_table(results):
     df = pd.DataFrame(results)
-    styled_df = df.style.applymap(get_signal_color)
+    styled_df = df.style.applymap(lambda x: get_signal_color(x) if isinstance(x, str) else '')
     return styled_df
 
 # Consensus Signal Logic
 def get_consensus_signal(signals):
-    long_count = sum(1 for s in signals if "Buy CE" in s or "Long" in s)
-    short_count = sum(1 for s in signals if "Buy PE" in s or "Short" in s)
+    long_count = sum(1 for s in signals if isinstance(s, str) and ("Buy CE" in s or "Long" in s))
+    short_count = sum(1 for s in signals if isinstance(s, str) and ("Buy PE" in s or "Short" in s))
     if long_count >= 2:
         return "Long"
     elif short_count >= 2:
@@ -1143,7 +1145,6 @@ def main():
         if st.session_state.live_scanning:
             st.subheader("Live Signal Results")
             display_live_prices()
-            results_placeholder = st.empty()
             if st.session_state.live_results:
                 st.dataframe(format_signal_table(st.session_state.live_results))
             if st.session_state.market_closed:
@@ -1299,7 +1300,7 @@ def main():
 def display_live_prices():
     nifty_price = fetch_live_price('^NSEI')
     sensex_price = fetch_live_price('^BSESN')
-    stock_price = fetch_live_price(st.session_state.stock_symbol) if st.session_state.stock_symbol else None
+    stock_price = fetch_live_price(st.session_state.stock_symbol) if st.session_state.stock_symbol else "N/A"
     st.write(f"**Nifty:** {nifty_price} | **Sensex:** {sensex_price} | **Stock:** {stock_price}")
 
 def fetch_live_price(symbol):
