@@ -16,7 +16,7 @@ import threading
 import yfinance as yf
 from bs4 import BeautifulSoup
 import re
-from io import StringIO
+from io import StringIO, BytesIO
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import websocket
