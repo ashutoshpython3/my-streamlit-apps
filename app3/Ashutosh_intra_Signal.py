@@ -159,12 +159,12 @@ def generate_sample_data(symbol='^NSEI', days=30, base_price=None):
 def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     st.info(f"Generating sample intraday data for {symbol} for {date}...")
     
-    # Create timestamps for market hours (9:15 to 15:30)
+    # Create timestamps for market hours (9:15 to 15:30) with the specified timeframe
     start_time = datetime.combine(date, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
     end_time = datetime.combine(date, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
     
-    # Create 1-minute timestamps
-    timestamps = pd.date_range(start=start_time, end=end_time, freq='1min')
+    # Create timestamps with the specified timeframe
+    timestamps = pd.date_range(start=start_time, end=end_time, freq=f'{timeframe_minutes}min')
     
     # Use different base prices for different symbols
     if symbol == '^NSEI':
@@ -182,12 +182,12 @@ def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     current_price = base_price
     
     for timestamp in timestamps:
-        # 1-minute price change with some randomness
-        change = np.random.normal(0, 0.0005)
+        # Price change with some randomness
+        change = np.random.normal(0, 0.001)
         open_price = current_price * (1 + change * 0.5)
         close_price = current_price * (1 + change)
-        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0002)))
-        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0002)))
+        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0005)))
+        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0005)))
         volume = int(np.random.normal(5000, 1000))
         
         intraday_data.append({
@@ -200,13 +200,14 @@ def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
             'oi': np.random.randint(1000, 5000)
         })
         
-        # Update base price for next minute
+        # Update base price for next interval
         current_price = close_price
     
     df = pd.DataFrame(intraday_data)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
     
+    # Ensure timezone is set correctly
     if df.index.tz is None:
         df.index = df.index.tz_localize('Asia/Kolkata')
     else:
@@ -215,11 +216,12 @@ def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'OI']
     df['VIX'] = 15.0
     
-    # Convert to desired timeframe
-    df = convert_timeframe(df, timeframe_minutes=timeframe_minutes)
-    
     # Ensure we have data for the full market hours
     df = df.between_time('09:15', '15:30')
+    
+    # Ensure we have enough data for indicators (at least 21 rows)
+    if len(df) < 21:
+        st.warning(f"Only {len(df)} rows generated. This may not be enough for accurate signal generation.")
     
     return df
 
@@ -469,12 +471,9 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 # Ensure we have data for the full market hours
                 df = df.between_time('09:15', '15:30')
                 
-                # Filter to the simulation date
-                df = df[df.index.date == sim_date_dt.date()]
-                
-                # Check if we got any data
-                if df.empty:
-                    st.warning(f"No data returned after processing for {symbol}. Using sample data as fallback.")
+                # Check if we have enough data
+                if len(df) < 21:
+                    st.warning(f"Only {len(df)} rows of data returned for {symbol}. Using sample data as fallback.")
                     df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                 
                 st.success(f"Successfully fetched and converted {len(df)} rows of {timeframe_minutes}-minute intraday data for {symbol}")
