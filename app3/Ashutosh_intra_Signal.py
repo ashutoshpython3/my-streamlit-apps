@@ -385,6 +385,20 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
     # Parse the simulation date
     sim_date_dt = datetime.strptime(sim_date.strip(), '%Y-%m-%d')
     
+    # Check if the date is in the future
+    current_date = datetime.now(pytz.timezone('Asia/Kolkata')).date()
+    if sim_date_dt.date() > current_date:
+        st.warning(f"{sim_date} is a future date. Generating sample data for simulation.")
+        for symbol in index_symbols:
+            df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
+            intraday_data[symbol] = df
+        return intraday_data
+    
+    # Check if the date is a weekend
+    if sim_date_dt.weekday() >= 5:
+        st.error(f"{sim_date} is a weekend (not a trading day).")
+        return intraday_data
+    
     for symbol in index_symbols:
         try:
             st.write(f"Fetching intraday data for {symbol} on {sim_date}")
@@ -1260,72 +1274,76 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
         hist_atr_avg = hist_atr_avg_dict.get(index_symbol, 0)
         
         # Process all data points for full market hours (9:15 AM to 3:30 PM)
-        for i in range(21, len(df_intra)):
-            df_slice = df_intra.iloc[:i+1]
-            bar_time = df_slice.index[-1].strftime('%H:%M')
-            
-            direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
-                df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
-            )
-            
-            # Get the latest patterns for display
-            kell_phase = df_slice.iloc[-1]['PHASE']
-            goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
-            unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
-            cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-            
-            # Add to results - convert time to 12-hour format
-            results.append({
-                'Time': format_time_12h(bar_time),
-                'Price': current_price,
-                'Signal': signal,
-                'Kell Phase': kell_phase,
-                'Goverdhan Pattern': goverdhan_patterns,
-                'Unger Signal': unger_pattern,
-                'Cook Signal': cook_pattern,
-                'Option Sentiment': option_sentiment
-            })
-            
-            warning, warning_message = False, ""
-            if active_trade:
-                warning, warning_message = monitor_trade(df_slice, active_trade, trade_entry_price, stop_loss, prev_strikes_oi, index_symbol, simulation=True)
-                if warning:
-                    st.warning(f"Sim Time: {bar_time} | Warning: {warning_message}")
-                    active_trade = None
-            
-            if signal != "No Signal" and not active_trade:
-                active_trade = trade_type
-                trade_entry_price = current_price
+        # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+        min_bars_required = 21
+        if len(df_intra) >= min_bars_required:
+            # Process all bars from min_bars_required to end
+            for i in range(min_bars_required, len(df_intra)):
+                df_slice = df_intra.iloc[:i+1]
+                bar_time = df_slice.index[-1].strftime('%H:%M')
                 
-                # Only show new trade notification in the sidebar, not in the main results
-                with st.sidebar:
-                    st.subheader(f"*** NEW TRADE ***")
-                    st.write(f"Time: {format_time_12h(bar_time)} [{index_symbol}]")
-                    st.write(f"Current Price: {current_price:.2f}")
-                    st.write(f"Direction: {direction}")
-                    
-                    # Display signal with color
-                    signal_color = get_signal_color(signal)
-                    st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
-                    
-                    st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
-                    st.write(f"VIX: {vix:.2f} (Bearish OI: {bearish_oi})")
-                    st.write(f"Option Sentiment: {option_sentiment}")
-                    st.write(f"Kell Phase: {kell_phase}")
-                    st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
-                    st.write(f"Unger Signal: {unger_pattern}")
-                    st.write(f"Cook Signal: {cook_pattern}")
-                    
-                    if buildups['bullish'] or buildups['bearish']:
-                        st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
-                    
-                    st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
-                    st.write("****************")
+                direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
+                    df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
+                )
                 
-                # Play sound alert
-                play_alert_sound("alert")
-            
-            prev_strikes_oi = {}
+                # Get the latest patterns for display
+                kell_phase = df_slice.iloc[-1]['PHASE']
+                goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
+                unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
+                cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
+                
+                # Add to results - convert time to 12-hour format
+                results.append({
+                    'Time': format_time_12h(bar_time),
+                    'Price': current_price,
+                    'Signal': signal,
+                    'Kell Phase': kell_phase,
+                    'Goverdhan Pattern': goverdhan_patterns,
+                    'Unger Signal': unger_pattern,
+                    'Cook Signal': cook_pattern,
+                    'Option Sentiment': option_sentiment
+                })
+                
+                warning, warning_message = False, ""
+                if active_trade:
+                    warning, warning_message = monitor_trade(df_slice, active_trade, trade_entry_price, stop_loss, prev_strikes_oi, index_symbol, simulation=True)
+                    if warning:
+                        st.warning(f"Sim Time: {bar_time} | Warning: {warning_message}")
+                        active_trade = None
+                
+                if signal != "No Signal" and not active_trade:
+                    active_trade = trade_type
+                    trade_entry_price = current_price
+                    
+                    # Only show new trade notification in the sidebar, not in the main results
+                    with st.sidebar:
+                        st.subheader(f"*** NEW TRADE ***")
+                        st.write(f"Time: {format_time_12h(bar_time)} [{index_symbol}]")
+                        st.write(f"Current Price: {current_price:.2f}")
+                        st.write(f"Direction: {direction}")
+                        
+                        # Display signal with color
+                        signal_color = get_signal_color(signal)
+                        st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
+                        
+                        st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
+                        st.write(f"VIX: {vix:.2f} (Bearish OI: {bearish_oi})")
+                        st.write(f"Option Sentiment: {option_sentiment}")
+                        st.write(f"Kell Phase: {kell_phase}")
+                        st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
+                        st.write(f"Unger Signal: {unger_pattern}")
+                        st.write(f"Cook Signal: {cook_pattern}")
+                        
+                        if buildups['bullish'] or buildups['bearish']:
+                            st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
+                        
+                        st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
+                        st.write("****************")
+                    
+                    # Play sound alert
+                    play_alert_sound("alert")
+                
+                prev_strikes_oi = {}
         
         # Create a DataFrame from the results
         results_df = pd.DataFrame(results)
@@ -1369,60 +1387,64 @@ def simulate_stock(stock_symbol, sim_date=None):
     results = []
     
     # Process all data points for full market hours (9:15 AM to 3:30 PM)
-    for i in range(21, len(stock_data)):
-        df_slice = stock_data.iloc[:i+1]
-        bar_time = df_slice.index[-1].strftime('%H:%M')
-        
-        direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
-            df_slice, 6.5, 0, stock_symbol, simulation=True
-        )
-        
-        # Get the latest patterns for display
-        kell_phase = df_slice.iloc[-1]['PHASE']
-        goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
-        unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
-        cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-        
-        # Add to results - convert time to 12-hour format
-        results.append({
-            'Time': format_time_12h(bar_time),
-            'Price': current_price,
-            'Signal': signal,
-            'Kell Phase': kell_phase,
-            'Goverdhan Pattern': goverdhan_patterns,
-            'Unger Signal': unger_pattern,
-            'Cook Signal': cook_pattern,
-            'Option Sentiment': option_sentiment
-        })
-        
-        if signal != "No Signal":
-            # Only show new trade notification in the sidebar, not in the main results
-            with st.sidebar:
-                st.subheader(f"*** NEW TRADE ***")
-                st.write(f"Time: {format_time_12h(bar_time)} [{stock_symbol}]")
-                st.write(f"Current Price: {current_price:.2f}")
-                st.write(f"Direction: {direction}")
-                
-                # Display signal with color
-                signal_color = get_signal_color(signal)
-                st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
-                
-                st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
-                st.write(f"VIX: {vix:.2f}")
-                st.write(f"Option Sentiment: {option_sentiment}")
-                st.write(f"Kell Phase: {kell_phase}")
-                st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
-                st.write(f"Unger Signal: {unger_pattern}")
-                st.write(f"Cook Signal: {cook_pattern}")
-                
-                if buildups['bullish'] or buildups['bearish']:
-                    st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
-                
-                st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
-                st.write("****************")
+    # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+    min_bars_required = 21
+    if len(stock_data) >= min_bars_required:
+        # Process all bars from min_bars_required to end
+        for i in range(min_bars_required, len(stock_data)):
+            df_slice = stock_data.iloc[:i+1]
+            bar_time = df_slice.index[-1].strftime('%H:%M')
             
-            # Play sound alert
-            play_alert_sound("alert")
+            direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
+                df_slice, 6.5, 0, stock_symbol, simulation=True
+            )
+            
+            # Get the latest patterns for display
+            kell_phase = df_slice.iloc[-1]['PHASE']
+            goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
+            unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
+            cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
+            
+            # Add to results - convert time to 12-hour format
+            results.append({
+                'Time': format_time_12h(bar_time),
+                'Price': current_price,
+                'Signal': signal,
+                'Kell Phase': kell_phase,
+                'Goverdhan Pattern': goverdhan_patterns,
+                'Unger Signal': unger_pattern,
+                'Cook Signal': cook_pattern,
+                'Option Sentiment': option_sentiment
+            })
+            
+            if signal != "No Signal":
+                # Only show new trade notification in the sidebar, not in the main results
+                with st.sidebar:
+                    st.subheader(f"*** NEW TRADE ***")
+                    st.write(f"Time: {format_time_12h(bar_time)} [{stock_symbol}]")
+                    st.write(f"Current Price: {current_price:.2f}")
+                    st.write(f"Direction: {direction}")
+                    
+                    # Display signal with color
+                    signal_color = get_signal_color(signal)
+                    st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
+                    
+                    st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
+                    st.write(f"VIX: {vix:.2f}")
+                    st.write(f"Option Sentiment: {option_sentiment}")
+                    st.write(f"Kell Phase: {kell_phase}")
+                    st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
+                    st.write(f"Unger Signal: {unger_pattern}")
+                    st.write(f"Cook Signal: {cook_pattern}")
+                    
+                    if buildups['bullish'] or buildups['bearish']:
+                        st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
+                    
+                    st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
+                    st.write("****************")
+                
+                # Play sound alert
+                play_alert_sound("alert")
     
     # Create a DataFrame from the results
     if results:
@@ -1484,73 +1506,78 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
             avg_band_pct = avg_band_pct_dict.get(index_symbol, 6.5)
             hist_atr_avg = hist_atr_avg_dict.get(index_symbol, 0)
             
-            for i in range(21, len(df_intra)):
-                df_slice = df_intra.iloc[:i+1]
-                bar_time = df_slice.index[-1].strftime('%H:%M')
-                
-                direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
-                    df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
-                )
-                
-                kell_phase = df_slice.iloc[-1]['PHASE']
-                goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
-                unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
-                cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-                
-                result_row = {
-                    'Date': sim_date_str,
-                    'Time': format_time_12h(bar_time),
-                    'Index': index_symbol,
-                    'Price': current_price,
-                    'Signal': signal,
-                    'Kell Phase': kell_phase,
-                    'Goverdhan Pattern': goverdhan_patterns,
-                    'Unger Signal': unger_pattern,
-                    'Cook Signal': cook_pattern,
-                    'Option Sentiment': option_sentiment
-                }
-                
-                all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
-                
-                warning, warning_message = False, ""
-                if active_trade:
-                    warning, warning_message = monitor_trade(df_slice, active_trade, trade_entry_price, stop_loss, prev_strikes_oi, index_symbol, simulation=True)
-                    if warning:
-                        st.warning(f"Sim Time: {bar_time} | Warning: {warning_message}")
-                        active_trade = None
-                
-                if signal != "No Signal" and not active_trade:
-                    active_trade = trade_type
-                    trade_entry_price = current_price
+            # Process all data points for full market hours (9:15 AM to 3:30 PM)
+            # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+            min_bars_required = 21
+            if len(df_intra) >= min_bars_required:
+                # Process all bars from min_bars_required to end
+                for i in range(min_bars_required, len(df_intra)):
+                    df_slice = df_intra.iloc[:i+1]
+                    bar_time = df_slice.index[-1].strftime('%H:%M')
                     
-                    # Only show new trade notification in the sidebar, not in the main results
-                    with st.sidebar:
-                        st.subheader(f"*** NEW TRADE ***")
-                        st.write(f"Date: {sim_date_str}")
-                        st.write(f"Time: {format_time_12h(bar_time)} [{index_symbol}]")
-                        st.write(f"Current Price: {current_price:.2f}")
-                        st.write(f"Direction: {direction}")
-                        
-                        signal_color = get_signal_color(signal)
-                        st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
-                        
-                        st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
-                        st.write(f"VIX: {vix:.2f} (Bearish OI: {bearish_oi})")
-                        st.write(f"Option Sentiment: {option_sentiment}")
-                        st.write(f"Kell Phase: {kell_phase}")
-                        st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
-                        st.write(f"Unger Signal: {unger_pattern}")
-                        st.write(f"Cook Signal: {cook_pattern}")
-                        
-                        if buildups['bullish'] or buildups['bearish']:
-                            st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
-                        
-                        st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
-                        st.write("****************")
+                    direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
+                        df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
+                    )
                     
-                    play_alert_sound("alert")
-                
-                prev_strikes_oi = {}
+                    kell_phase = df_slice.iloc[-1]['PHASE']
+                    goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
+                    unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
+                    cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
+                    
+                    result_row = {
+                        'Date': sim_date_str,
+                        'Time': format_time_12h(bar_time),
+                        'Index': index_symbol,
+                        'Price': current_price,
+                        'Signal': signal,
+                        'Kell Phase': kell_phase,
+                        'Goverdhan Pattern': goverdhan_patterns,
+                        'Unger Signal': unger_pattern,
+                        'Cook Signal': cook_pattern,
+                        'Option Sentiment': option_sentiment
+                    }
+                    
+                    all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
+                    
+                    warning, warning_message = False, ""
+                    if active_trade:
+                        warning, warning_message = monitor_trade(df_slice, active_trade, trade_entry_price, stop_loss, prev_strikes_oi, index_symbol, simulation=True)
+                        if warning:
+                            st.warning(f"Sim Time: {bar_time} | Warning: {warning_message}")
+                            active_trade = None
+                    
+                    if signal != "No Signal" and not active_trade:
+                        active_trade = trade_type
+                        trade_entry_price = current_price
+                        
+                        # Only show new trade notification in the sidebar, not in the main results
+                        with st.sidebar:
+                            st.subheader(f"*** NEW TRADE ***")
+                            st.write(f"Date: {sim_date_str}")
+                            st.write(f"Time: {format_time_12h(bar_time)} [{index_symbol}]")
+                            st.write(f"Current Price: {current_price:.2f}")
+                            st.write(f"Direction: {direction}")
+                            
+                            signal_color = get_signal_color(signal)
+                            st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
+                            
+                            st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
+                            st.write(f"VIX: {vix:.2f} (Bearish OI: {bearish_oi})")
+                            st.write(f"Option Sentiment: {option_sentiment}")
+                            st.write(f"Kell Phase: {kell_phase}")
+                            st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
+                            st.write(f"Unger Signal: {unger_pattern}")
+                            st.write(f"Cook Signal: {cook_pattern}")
+                            
+                            if buildups['bullish'] or buildups['bearish']:
+                                st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
+                            
+                            st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
+                            st.write("****************")
+                        
+                        play_alert_sound("alert")
+                    
+                    prev_strikes_oi = {}
     
     if not all_results.empty:
         def highlight_signals(val):
@@ -1953,61 +1980,66 @@ def main():
                             stock_data = compute_unger_strategy(stock_data)
                             stock_data = compute_cook_strategy(stock_data)
                             
-                            for i in range(21, len(stock_data)):
-                                df_slice = stock_data.iloc[:i+1]
-                                bar_time = df_slice.index[-1].strftime('%H:%M')
-                                
-                                direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
-                                    df_slice, 6.5, 0, stock_symbol, simulation=True
-                                )
-                                
-                                kell_phase = df_slice.iloc[-1]['PHASE']
-                                goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
-                                unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
-                                cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-                                
-                                result_row = {
-                                    'Date': sim_date_str,
-                                    'Time': format_time_12h(bar_time),
-                                    'Stock': stock_symbol,
-                                    'Price': current_price,
-                                    'Signal': signal,
-                                    'Kell Phase': kell_phase,
-                                    'Goverdhan Pattern': goverdhan_patterns,
-                                    'Unger Signal': unger_pattern,
-                                    'Cook Signal': cook_pattern,
-                                    'Option Sentiment': option_sentiment
-                                }
-                                
-                                all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
-                                
-                                if signal != "No Signal":
-                                    # Only show new trade notification in the sidebar, not in the main results
-                                    with st.sidebar:
-                                        st.subheader(f"*** NEW TRADE ***")
-                                        st.write(f"Date: {sim_date_str}")
-                                        st.write(f"Time: {format_time_12h(bar_time)} [{stock_symbol}]")
-                                        st.write(f"Current Price: {current_price:.2f}")
-                                        st.write(f"Direction: {direction}")
-                                        
-                                        signal_color = get_signal_color(signal)
-                                        st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
-                                        
-                                        st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
-                                        st.write(f"VIX: {vix:.2f}")
-                                        st.write(f"Option Sentiment: {option_sentiment}")
-                                        st.write(f"Kell Phase: {kell_phase}")
-                                        st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
-                                        st.write(f"Unger Signal: {unger_pattern}")
-                                        st.write(f"Cook Signal: {cook_pattern}")
-                                        
-                                        if buildups['bullish'] or buildups['bearish']:
-                                            st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
-                                        
-                                        st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
-                                        st.write("****************")
+                            # Process all data points for full market hours (9:15 AM to 3:30 PM)
+                            # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+                            min_bars_required = 21
+                            if len(stock_data) >= min_bars_required:
+                                # Process all bars from min_bars_required to end
+                                for i in range(min_bars_required, len(stock_data)):
+                                    df_slice = stock_data.iloc[:i+1]
+                                    bar_time = df_slice.index[-1].strftime('%H:%M')
                                     
-                                    play_alert_sound("alert")
+                                    direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
+                                        df_slice, 6.5, 0, stock_symbol, simulation=True
+                                    )
+                                    
+                                    kell_phase = df_slice.iloc[-1]['PHASE']
+                                    goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
+                                    unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
+                                    cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
+                                    
+                                    result_row = {
+                                        'Date': sim_date_str,
+                                        'Time': format_time_12h(bar_time),
+                                        'Stock': stock_symbol,
+                                        'Price': current_price,
+                                        'Signal': signal,
+                                        'Kell Phase': kell_phase,
+                                        'Goverdhan Pattern': goverdhan_patterns,
+                                        'Unger Signal': unger_pattern,
+                                        'Cook Signal': cook_pattern,
+                                        'Option Sentiment': option_sentiment
+                                    }
+                                    
+                                    all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
+                                    
+                                    if signal != "No Signal":
+                                        # Only show new trade notification in the sidebar, not in the main results
+                                        with st.sidebar:
+                                            st.subheader(f"*** NEW TRADE ***")
+                                            st.write(f"Date: {sim_date_str}")
+                                            st.write(f"Time: {format_time_12h(bar_time)} [{stock_symbol}]")
+                                            st.write(f"Current Price: {current_price:.2f}")
+                                            st.write(f"Direction: {direction}")
+                                            
+                                            signal_color = get_signal_color(signal)
+                                            st.markdown(f"Signal: <span style='color:{signal_color}'>{signal}</span>", unsafe_allow_html=True)
+                                            
+                                            st.write(f"Adapted Bands: Lower={lower:.2f}, Upper={upper:.2f}")
+                                            st.write(f"VIX: {vix:.2f}")
+                                            st.write(f"Option Sentiment: {option_sentiment}")
+                                            st.write(f"Kell Phase: {kell_phase}")
+                                            st.write(f"Goverdhan Pattern: {goverdhan_patterns}")
+                                            st.write(f"Unger Signal: {unger_pattern}")
+                                            st.write(f"Cook Signal: {cook_pattern}")
+                                            
+                                            if buildups['bullish'] or buildups['bearish']:
+                                                st.write(f"OI Buildups: Bullish={buildups['bullish']}, Bearish={buildups['bearish']}")
+                                            
+                                            st.write(f"Target: {target:.2f}, Stop Loss: {stop_loss:.2f}")
+                                            st.write("****************")
+                                        
+                                        play_alert_sound("alert")
                     
                     if not all_results.empty:
                         def highlight_signals(val):
