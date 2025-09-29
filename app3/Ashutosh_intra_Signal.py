@@ -159,12 +159,21 @@ def generate_sample_data(symbol='^NSEI', days=30, base_price=None):
 def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     st.info(f"Generating sample intraday data for {symbol} for {date}...")
     
-    # Create timestamps for market hours (9:15 to 15:30) with the specified timeframe
-    start_time = datetime.combine(date, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
-    end_time = datetime.combine(date, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
+    # We need to generate 5 days of data ending with the specified date
+    end_date = date
+    start_date = end_date - timedelta(days=5)
     
-    # Create timestamps with the specified timeframe
-    timestamps = pd.date_range(start=start_time, end=end_time, freq=f'{timeframe_minutes}min')
+    # Adjust for weekends
+    while start_date.weekday() >= 5:
+        start_date = start_date - timedelta(days=1)
+    
+    # Create a list of trading days
+    trading_days = []
+    current_date = start_date
+    while current_date <= end_date:
+        if current_date.weekday() < 5:  # Monday to Friday
+            trading_days.append(current_date)
+        current_date += timedelta(days=1)
     
     # Use different base prices for different symbols
     if symbol == '^NSEI':
@@ -174,36 +183,49 @@ def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     else:
         base_price = 1000
     
-    # Set a seed based on the symbol and date to ensure different data
-    seed = hash(symbol + str(date)) % 1000
-    np.random.seed(seed)
+    all_data = []
     
-    intraday_data = []
-    current_price = base_price
-    
-    for timestamp in timestamps:
-        # Price change with some randomness
-        change = np.random.normal(0, 0.001)
-        open_price = current_price * (1 + change * 0.5)
-        close_price = current_price * (1 + change)
-        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0005)))
-        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0005)))
-        volume = int(np.random.normal(5000, 1000))
+    # Generate data for each trading day
+    for day in trading_days:
+        # Create timestamps for market hours (9:15 to 15:30) with the specified timeframe
+        start_time = datetime.combine(day, time(9, 15)).astimezone(pytz.timezone('Asia/Kolkata'))
+        end_time = datetime.combine(day, time(15, 30)).astimezone(pytz.timezone('Asia/Kolkata'))
         
-        intraday_data.append({
-            'timestamp': timestamp,
-            'open': open_price,
-            'high': high_price,
-            'low': low_price,
-            'close': close_price,
-            'volume': volume,
-            'oi': np.random.randint(1000, 5000)
-        })
+        # Create timestamps with the specified timeframe
+        timestamps = pd.date_range(start=start_time, end=end_time, freq=f'{timeframe_minutes}min')
         
-        # Update base price for next interval
-        current_price = close_price
+        # Set a seed based on the symbol and date to ensure different data
+        seed = hash(symbol + str(day)) % 1000
+        np.random.seed(seed)
+        
+        current_price = base_price
+        
+        for timestamp in timestamps:
+            # Price change with some randomness
+            change = np.random.normal(0, 0.001)
+            open_price = current_price * (1 + change * 0.5)
+            close_price = current_price * (1 + change)
+            high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0005)))
+            low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0005)))
+            volume = int(np.random.normal(5000, 1000))
+            
+            all_data.append({
+                'timestamp': timestamp,
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': volume,
+                'oi': np.random.randint(1000, 5000)
+            })
+            
+            # Update base price for next interval
+            current_price = close_price
+        
+        # Update base price for next day
+        base_price = close_price
     
-    df = pd.DataFrame(intraday_data)
+    df = pd.DataFrame(all_data)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
     
@@ -218,6 +240,9 @@ def generate_sample_intraday_data_for_date(symbol, date, timeframe_minutes=15):
     
     # Ensure we have data for the full market hours
     df = df.between_time('09:15', '15:30')
+    
+    # Filter to the simulation date
+    df = df[df.index.date == date.date()]
     
     # Ensure we have enough data for indicators (at least 21 rows)
     if len(df) < 21:
@@ -392,6 +417,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
     if sim_date_dt.date() > current_date:
         st.warning(f"{sim_date} is a future date. Generating sample data for simulation.")
         for symbol in index_symbols:
+            # Generate 5 days of data ending with the simulation date
             df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
             intraday_data[symbol] = df
         return intraday_data
@@ -413,9 +439,15 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
             else:
                 instrument_key = get_stock_instrument_key(symbol)
             
+            # Calculate start date (5 days before simulation date)
+            start_date_dt = sim_date_dt - timedelta(days=5)
+            # Adjust for weekends
+            while start_date_dt.weekday() >= 5:
+                start_date_dt = start_date_dt - timedelta(days=1)
+            
             # Format dates correctly for Upstox API
             to_date = sim_date_dt.strftime('%Y-%m-%d')
-            from_date = sim_date_dt.strftime('%Y-%m-%d')
+            from_date = start_date_dt.strftime('%Y-%m-%d')
             
             # Try to fetch intraday data using the new endpoint
             url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/1minute"
@@ -426,6 +458,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 if response.status_code != 200:
                     st.error(f"API returned status code {response.status_code} for {symbol}")
                     st.info("Using sample data as fallback...")
+                    # Generate 5 days of data ending with the simulation date
                     df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                     intraday_data[symbol] = df
                     continue
@@ -435,6 +468,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 if not data or 'data' not in data or 'candles' not in data['data']:
                     st.error(f"No data returned for {symbol}")
                     st.info("Using sample data as fallback...")
+                    # Generate 5 days of data ending with the simulation date
                     df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                     intraday_data[symbol] = df
                     continue
@@ -443,6 +477,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 if not candles:
                     st.error(f"No candles returned for {symbol}")
                     st.info("Using sample data as fallback...")
+                    # Generate 5 days of data ending with the simulation date
                     df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                     intraday_data[symbol] = df
                     continue
@@ -471,9 +506,13 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 # Ensure we have data for the full market hours
                 df = df.between_time('09:15', '15:30')
                 
+                # Filter to the simulation date
+                df = df[df.index.date == sim_date_dt.date()]
+                
                 # Check if we have enough data
                 if len(df) < 21:
                     st.warning(f"Only {len(df)} rows of data returned for {symbol}. Using sample data as fallback.")
+                    # Generate 5 days of data ending with the simulation date
                     df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                 
                 st.success(f"Successfully fetched and converted {len(df)} rows of {timeframe_minutes}-minute intraday data for {symbol}")
@@ -481,6 +520,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
                 
             except requests.exceptions.ConnectionError:
                 st.error(f"Connection error when fetching intraday data for {symbol}. Using sample data as fallback...")
+                # Generate 5 days of data ending with the simulation date
                 df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
                 intraday_data[symbol] = df
                 continue
@@ -488,6 +528,7 @@ def fetch_intraday_data_for_date(index_symbols, sim_date, api_key=None, access_t
         except Exception as e:
             st.error(f"Error fetching intraday data for {symbol}: {e}")
             st.info("Using sample data as fallback...")
+            # Generate 5 days of data ending with the simulation date
             df = generate_sample_intraday_data_for_date(symbol, sim_date_dt, timeframe_minutes)
             intraday_data[symbol] = df
             continue
@@ -503,8 +544,9 @@ def fetch_stock_data_for_date(symbol, date, timeframe_minutes=15):
         ticker = yf.Ticker(symbol)
         
         # Fetch data for a wider period to ensure we get the specific date
+        # We need 5 days of data ending with the specified date
         end_date = date + timedelta(days=1)
-        start_date = date - timedelta(days=7)
+        start_date = date - timedelta(days=5)
         
         data = ticker.history(start=start_date, end=end_date, interval='5m')
         
@@ -1273,14 +1315,30 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
         hist_atr_avg = hist_atr_avg_dict.get(index_symbol, 0)
         
         # Process all data points for full market hours (9:15 AM to 3:30 PM)
-        # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+        # We need at least 21 bars to compute indicators, so we'll start generating signals from the 21st bar
         min_bars_required = 21
-        if len(df_intra) >= min_bars_required:
-            # Process all bars from min_bars_required to end
-            for i in range(min_bars_required, len(df_intra)):
-                df_slice = df_intra.iloc[:i+1]
-                bar_time = df_slice.index[-1].strftime('%H:%M')
-                
+        
+        for i in range(len(df_intra)):
+            df_slice = df_intra.iloc[:i+1]
+            bar_time = df_slice.index[-1].strftime('%H:%M')
+            current_price = df_slice.iloc[-1]['Close']
+            
+            # Initialize with default values
+            direction = "Unknown"
+            signal = "No Signal"
+            upper = 0
+            lower = 0
+            vix = 0
+            bearish_oi = False
+            buildups = {}
+            kell_signal = "No Kell Signal"
+            goverdhan_signal = "No Goverdhan Signal"
+            unger_signal = "No Unger Signal"
+            cook_signal = "No Cook Signal"
+            option_sentiment = "Neutral"
+            
+            # Only generate signals if we have enough data
+            if len(df_slice) >= min_bars_required:
                 direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
                     df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
                 )
@@ -1290,18 +1348,6 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
                 goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
                 unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
                 cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-                
-                # Add to results - convert time to 12-hour format
-                results.append({
-                    'Time': format_time_12h(bar_time),
-                    'Price': current_price,
-                    'Signal': signal,
-                    'Kell Phase': kell_phase,
-                    'Goverdhan Pattern': goverdhan_patterns,
-                    'Unger Signal': unger_pattern,
-                    'Cook Signal': cook_pattern,
-                    'Option Sentiment': option_sentiment
-                })
                 
                 warning, warning_message = False, ""
                 if active_trade:
@@ -1343,6 +1389,24 @@ def simulate_day(sim_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, 
                     play_alert_sound("alert")
                 
                 prev_strikes_oi = {}
+            else:
+                # If we don't have enough data, still record the time and price but with no signal
+                kell_phase = "N/A"
+                goverdhan_patterns = "N/A"
+                unger_pattern = "N/A"
+                cook_pattern = "N/A"
+            
+            # Add to results - convert time to 12-hour format
+            results.append({
+                'Time': format_time_12h(bar_time),
+                'Price': current_price,
+                'Signal': signal,
+                'Kell Phase': kell_phase,
+                'Goverdhan Pattern': goverdhan_patterns,
+                'Unger Signal': unger_pattern,
+                'Cook Signal': cook_pattern,
+                'Option Sentiment': option_sentiment
+            })
         
         # Create a DataFrame from the results
         results_df = pd.DataFrame(results)
@@ -1386,14 +1450,30 @@ def simulate_stock(stock_symbol, sim_date=None):
     results = []
     
     # Process all data points for full market hours (9:15 AM to 3:30 PM)
-    # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+    # We need at least 21 bars to compute indicators, so we'll start generating signals from the 21st bar
     min_bars_required = 21
-    if len(stock_data) >= min_bars_required:
-        # Process all bars from min_bars_required to end
-        for i in range(min_bars_required, len(stock_data)):
-            df_slice = stock_data.iloc[:i+1]
-            bar_time = df_slice.index[-1].strftime('%H:%M')
-            
+    
+    for i in range(len(stock_data)):
+        df_slice = stock_data.iloc[:i+1]
+        bar_time = df_slice.index[-1].strftime('%H:%M')
+        current_price = df_slice.iloc[-1]['Close']
+        
+        # Initialize with default values
+        direction = "Unknown"
+        signal = "No Signal"
+        upper = 0
+        lower = 0
+        vix = 0
+        bearish_oi = False
+        buildups = {}
+        kell_signal = "No Kell Signal"
+        goverdhan_signal = "No Goverdhan Signal"
+        unger_signal = "No Unger Signal"
+        cook_signal = "No Cook Signal"
+        option_sentiment = "Neutral"
+        
+        # Only generate signals if we have enough data
+        if len(df_slice) >= min_bars_required:
             direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
                 df_slice, 6.5, 0, stock_symbol, simulation=True
             )
@@ -1403,18 +1483,6 @@ def simulate_stock(stock_symbol, sim_date=None):
             goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
             unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
             cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-            
-            # Add to results - convert time to 12-hour format
-            results.append({
-                'Time': format_time_12h(bar_time),
-                'Price': current_price,
-                'Signal': signal,
-                'Kell Phase': kell_phase,
-                'Goverdhan Pattern': goverdhan_patterns,
-                'Unger Signal': unger_pattern,
-                'Cook Signal': cook_pattern,
-                'Option Sentiment': option_sentiment
-            })
             
             if signal != "No Signal":
                 # Only show new trade notification in the sidebar, not in the main results
@@ -1444,6 +1512,24 @@ def simulate_stock(stock_symbol, sim_date=None):
                 
                 # Play sound alert
                 play_alert_sound("alert")
+        else:
+            # If we don't have enough data, still record the time and price but with no signal
+            kell_phase = "N/A"
+            goverdhan_patterns = "N/A"
+            unger_pattern = "N/A"
+            cook_pattern = "N/A"
+        
+        # Add to results - convert time to 12-hour format
+        results.append({
+            'Time': format_time_12h(bar_time),
+            'Price': current_price,
+            'Signal': signal,
+            'Kell Phase': kell_phase,
+            'Goverdhan Pattern': goverdhan_patterns,
+            'Unger Signal': unger_pattern,
+            'Cook Signal': cook_pattern,
+            'Option Sentiment': option_sentiment
+        })
     
     # Create a DataFrame from the results
     if results:
@@ -1462,7 +1548,6 @@ def simulate_stock(stock_symbol, sim_date=None):
         st.success("Simulation completed.")
     else:
         st.warning("No results to display for the simulation.")
-
 # Simulate Date Range
 def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, hist_atr_avg_dict, api_key=None, access_token=None, timeframe_minutes=15):
     start_date_dt = datetime.strptime(start_date.strip(), '%Y-%m-%d')
@@ -1506,37 +1591,39 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
             hist_atr_avg = hist_atr_avg_dict.get(index_symbol, 0)
             
             # Process all data points for full market hours (9:15 AM to 3:30 PM)
-            # Start from the minimum required bars for indicators (21) but ensure we cover all time periods
+            # We need at least 21 bars to compute indicators, so we'll start generating signals from the 21st bar
             min_bars_required = 21
-            if len(df_intra) >= min_bars_required:
-                # Process all bars from min_bars_required to end
-                for i in range(min_bars_required, len(df_intra)):
-                    df_slice = df_intra.iloc[:i+1]
-                    bar_time = df_slice.index[-1].strftime('%H:%M')
-                    
+            
+            for i in range(len(df_intra)):
+                df_slice = df_intra.iloc[:i+1]
+                bar_time = df_slice.index[-1].strftime('%H:%M')
+                current_price = df_slice.iloc[-1]['Close']
+                
+                # Initialize with default values
+                direction = "Unknown"
+                signal = "No Signal"
+                upper = 0
+                lower = 0
+                vix = 0
+                bearish_oi = False
+                buildups = {}
+                kell_signal = "No Kell Signal"
+                goverdhan_signal = "No Goverdhan Signal"
+                unger_signal = "No Unger Signal"
+                cook_signal = "No Cook Signal"
+                option_sentiment = "Neutral"
+                
+                # Only generate signals if we have enough data
+                if len(df_slice) >= min_bars_required:
                     direction, signal, upper, lower, vix, bearish_oi, buildups, current_price, kell_signal, goverdhan_signal, unger_signal, cook_signal, target, stop_loss, trade_type, option_sentiment = generate_signals(
                         df_slice, avg_band_pct, hist_atr_avg, index_symbol, simulation=True, prev_strikes_oi=prev_strikes_oi
                     )
                     
+                    # Get the latest patterns for display
                     kell_phase = df_slice.iloc[-1]['PHASE']
                     goverdhan_patterns = ', '.join([p for p in ['BULL_FLAG', 'EMA_KISS_FLY', 'HORIZONTAL_FADE', 'VCP', 'REVERSAL_SQUEEZE'] if df_slice.iloc[-1][p]])
                     unger_pattern = df_slice.iloc[-1]['UNGER_SIGNAL']
                     cook_pattern = df_slice.iloc[-1]['COOK_SIGNAL']
-                    
-                    result_row = {
-                        'Date': sim_date_str,
-                        'Time': format_time_12h(bar_time),
-                        'Index': index_symbol,
-                        'Price': current_price,
-                        'Signal': signal,
-                        'Kell Phase': kell_phase,
-                        'Goverdhan Pattern': goverdhan_patterns,
-                        'Unger Signal': unger_pattern,
-                        'Cook Signal': cook_pattern,
-                        'Option Sentiment': option_sentiment
-                    }
-                    
-                    all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
                     
                     warning, warning_message = False, ""
                     if active_trade:
@@ -1577,6 +1664,27 @@ def simulate_date_range(start_date, end_date, df_daily_dict, avg_band_pct_dict, 
                         play_alert_sound("alert")
                     
                     prev_strikes_oi = {}
+                else:
+                    # If we don't have enough data, still record the time and price but with no signal
+                    kell_phase = "N/A"
+                    goverdhan_patterns = "N/A"
+                    unger_pattern = "N/A"
+                    cook_pattern = "N/A"
+                
+                result_row = {
+                    'Date': sim_date_str,
+                    'Time': format_time_12h(bar_time),
+                    'Index': index_symbol,
+                    'Price': current_price,
+                    'Signal': signal,
+                    'Kell Phase': kell_phase,
+                    'Goverdhan Pattern': goverdhan_patterns,
+                    'Unger Signal': unger_pattern,
+                    'Cook Signal': cook_pattern,
+                    'Option Sentiment': option_sentiment
+                }
+                
+                all_results = pd.concat([all_results, pd.DataFrame([result_row])], ignore_index=True)
     
     if not all_results.empty:
         def highlight_signals(val):
