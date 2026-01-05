@@ -5,11 +5,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import time
-import requests
 import json
 import yfinance as yf
-import re
-from bs4 import BeautifulSoup
 import os
 
 # Set page configuration
@@ -19,19 +16,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-#Function to read the portfolio file
-def read_portfolio():
-    # Get the directory of the current script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    portfolio_path = os.path.join(script_dir, "portfolio.csv")
-    
-    try:
-        portfolio = pd.read_csv(portfolio_path)
-        return portfolio
-    except FileNotFoundError:
-        st.error(f"Portfolio file not found at {portfolio_path}")
-        return pd.DataFrame()
 
 # File paths for data persistence
 PORTFOLIO_FILE = "portfolio_data.json"
@@ -46,32 +30,6 @@ if 'transactions' not in st.session_state:
     
 if 'stock_data_cache' not in st.session_state:
     st.session_state.stock_data_cache = {}
-
-# Upstox API Configuration
-# Replace with your actual API key and access token
-UPSTOX_API_KEY = "9a56569a-142f-4247-a863-f4e663fb03f1"
-UPSTOX_ACCESS_TOKEN = "smgyr2big7"
-
-# Base URL for Upstox API
-BASE_URL = "https://api.upstox.com/v2"
-
-# Headers for API requests
-headers = {
-    'Accept': 'application/json',
-    'Authorization': f'Bearer {UPSTOX_ACCESS_TOKEN}'
-}
-
-# Predefined instrument keys for popular stocks - Reduced to 5 stocks
-INSTRUMENT_KEYS = {
-    "RELIANCE": "NSE_EQ|INE528G01035",
-    "TCS": "NSE_EQ|INE461B01029",
-    "HDFCBANK": "NSE_EQ|INE040A01034",
-    "INFY": "NSE_EQ|INE009A01021",
-    "HINDUNILVR": "NSE_EQ|INE029A01027"
-}
-
-# Nifty 50 instrument key
-NIFTY_INSTRUMENT_KEY = "NSE_INDEX|Nifty 50"
 
 # Function to save portfolio data to file
 def save_portfolio_data():
@@ -113,82 +71,8 @@ def load_transactions_data():
 load_portfolio_data()
 load_transactions_data()
 
-# Function to get historical data from Upstox (fixed based on official documentation)
-def get_historical_data_upstox(instrument_key, interval='day', from_date=None, to_date=None):
-    try:
-        if from_date is None:
-            from_date = datetime.now() - timedelta(days=1460)  # 4 years
-        
-        if to_date is None:
-            to_date = datetime.now()
-        
-        # Format dates to YYYY-MM-DD
-        from_date_str = from_date.strftime('%Y-%m-%d')
-        to_date_str = to_date.strftime('%Y-%m-%d')
-        
-        # Build URL according to Upstox API documentation
-        # Fixed: changed '1day' to 'day' as per API requirements
-        url = f"{BASE_URL}/historical-candle/{instrument_key}/{interval}/{to_date_str}/{from_date_str}"
-        
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code != 200:
-            st.error(f"Failed to get historical data from Upstox: {response.status_code} - {response.text}")
-            return None
-        
-        data = response.json()
-        
-        # Check if we have candles data
-        if 'data' not in data or 'candles' not in data['data']:
-            st.error(f"Invalid data format from Upstox API: {data}")
-            return None
-        
-        # Convert to DataFrame
-        candles = data['data']['candles']
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-        
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
-        
-        # Convert timezone to Asia/Kolkata if not already in that timezone
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('Asia/Kolkata')
-        else:
-            df.index = df.index.tz_convert('Asia/Kolkata')
-        
-        # Rename columns to match our format (capitalized)
-        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'OI']
-        
-        return df
-    except Exception as e:
-        st.error(f"Error getting historical data from Upstox: {str(e)}")
-        return None
-
-# Function to get quote data from Upstox (fixed based on official documentation)
-def get_quote_data_upstox(instrument_key):
-    try:
-        url = f"{BASE_URL}/quote/{instrument_key}"
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code != 200:
-            st.error(f"Failed to get quote data from Upstox: {response.status_code} - {response.text}")
-            return None
-        
-        data = response.json()
-        
-        # Check if we have valid data
-        if 'data' not in data:
-            st.error(f"Invalid data format from Upstox API: {data}")
-            return None
-            
-        return data['data']
-    except Exception as e:
-        st.error(f"Error getting quote data from Upstox: {str(e)}")
-        return None
-
-# Function to get stock data from Yahoo Finance with retry mechanism
-def get_stock_data_yahoo(symbol, period="4y", max_retries=3):
+# Function to get stock data from Yahoo Finance with improved retry mechanism
+def get_stock_data_yahoo(symbol, period="4y", max_retries=5):
     for attempt in range(max_retries):
         try:
             # Add .NS for NSE stocks
@@ -201,7 +85,9 @@ def get_stock_data_yahoo(symbol, period="4y", max_retries=3):
             # Make sure we have data
             if hist_data.empty:
                 if attempt < max_retries - 1:
-                    time.sleep(2)  # Wait before retry
+                    wait_time = 2 ** attempt
+                    st.warning(f"No data found for {symbol}. Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
                     continue
                 st.error(f"No historical data found for {symbol}")
                 return None
@@ -243,7 +129,7 @@ def get_stock_data_yahoo(symbol, period="4y", max_retries=3):
                 st.error(f"Error fetching data from Yahoo Finance for {symbol}: {str(e)}")
                 return None
 
-# Function to get fundamental data from Yahoo Finance (replacing MoneyControl)
+# Function to get fundamental data from Yahoo Finance
 def get_fundamental_data_yahoo(symbol):
     try:
         ticker = yf.Ticker(f"{symbol}.NS")
@@ -288,9 +174,9 @@ def get_fundamental_data_yahoo(symbol):
         st.error(f"Error getting fundamental data from Yahoo Finance for {symbol}: {str(e)}")
         return None
 
-# Function to get stock list (reduced to 5 stocks)
+# Function to get stock list
 def get_stock_list():
-    # For demo purposes, we'll use a predefined list of 5 popular Indian stocks
+    # For demo purposes, we'll use a predefined list of popular Indian stocks
     stocks = [
         {"symbol": "RELIANCE", "name": "Reliance Industries", "exchange": "NSE"},
         {"symbol": "TCS", "name": "Tata Consultancy Services", "exchange": "NSE"},
@@ -300,70 +186,26 @@ def get_stock_list():
     ]
     return stocks
 
-# Function to get stock data using multiple sources
+# Function to get stock data using Yahoo Finance
 def get_stock_data(symbol, period="4y"):
     if symbol in st.session_state.stock_data_cache:
         return st.session_state.stock_data_cache[symbol]
     
     try:
-        # First try to get data from Upstox if we have the instrument key
-        if symbol in INSTRUMENT_KEYS:
-            instrument_key = INSTRUMENT_KEYS[symbol]
-            
-            # Fetch historical data
-            # Fixed: changed '1day' to 'day' as per API requirements
-            historical_data = get_historical_data_upstox(
-                instrument_key=instrument_key,
-                interval='day',  # Fixed: use 'day' as per Upstox API
-                from_date=datetime.now() - timedelta(days=1460),
-                to_date=datetime.now()
-            )
-            
-            if historical_data is None or historical_data.empty:
-                # Fall back to Yahoo Finance
-                stock_data = get_stock_data_yahoo(symbol, period)
-                if stock_data:
-                    st.session_state.stock_data_cache[symbol] = stock_data
-                    return stock_data
-                return None
-            
-            # Get current quote
-            quote_data = get_quote_data_upstox(instrument_key)
-            
-            if quote_data is None:
-                # Fall back to Yahoo Finance
-                stock_data = get_stock_data_yahoo(symbol, period)
-                if stock_data:
-                    st.session_state.stock_data_cache[symbol] = stock_data
-                    return stock_data
-                return None
-            
-            # Get fundamental data from Yahoo Finance (replacing MoneyControl)
+        # Use Yahoo Finance for all stocks
+        stock_data = get_stock_data_yahoo(symbol, period)
+        if stock_data:
+            # Get fundamental data from Yahoo Finance
             fundamental_data = get_fundamental_data_yahoo(symbol)
             
-            # Cache the data
             st.session_state.stock_data_cache[symbol] = {
-                'history': historical_data,
-                'quote': quote_data,
+                'history': stock_data['history'],
+                'quote': stock_data['quote'],
                 'info': fundamental_data
             }
-            
             return st.session_state.stock_data_cache[symbol]
-        else:
-            # Use Yahoo Finance for stocks not in our predefined list
-            stock_data = get_stock_data_yahoo(symbol, period)
-            if stock_data:
-                # Get fundamental data from Yahoo Finance
-                fundamental_data = get_fundamental_data_yahoo(symbol)
-                
-                st.session_state.stock_data_cache[symbol] = {
-                    'history': stock_data['history'],
-                    'quote': stock_data['quote'],
-                    'info': fundamental_data
-                }
-                return st.session_state.stock_data_cache[symbol]
-            
-            return None
+        
+        return None
     except Exception as e:
         st.error(f"Error fetching data for {symbol}: {str(e)}")
         return None
@@ -743,74 +585,29 @@ def get_nifty_data(period="4y"):
         return st.session_state.stock_data_cache['^NSEI']['history']
     
     try:
-        # Try to get from Upstox first
-        historical_data = get_historical_data_upstox(
-            instrument_key=NIFTY_INSTRUMENT_KEY,
-            interval='day',  # Fixed: use 'day' as per Upstox API
-            from_date=datetime.now() - timedelta(days=1460),
-            to_date=datetime.now()
-        )
+        # Use Yahoo Finance for Nifty data
+        nifty_data = yf.Ticker("^NSEI").history(period=period)
         
-        if historical_data is None or historical_data.empty:
-            # Fall back to Yahoo Finance
-            nifty_data = yf.Ticker("^NSEI").history(period=period)
+        # Make sure we have data
+        if nifty_data.empty:
+            st.error("No historical data found for Nifty 50")
+            return None
             
-            # Make sure we have data
-            if nifty_data.empty:
-                st.error("No historical data found for Nifty 50")
-                return None
-                
-            # Rename columns to match our format (capitalized)
-            nifty_data = nifty_data.rename(columns={
-                'Open': 'Open',
-                'High': 'High',
-                'Low': 'Low',
-                'Close': 'Close',
-                'Volume': 'Volume'
-            })
-            
-            st.session_state.stock_data_cache['^NSEI'] = {
-                'history': nifty_data,
-                'quote': {'last_price': nifty_data['Close'].iloc[-1]},
-                'info': {}
-            }
-            return nifty_data
-        
-        # Get quote data
-        quote_data = get_quote_data_upstox(NIFTY_INSTRUMENT_KEY)
-        
-        if quote_data is None:
-            # Fall back to Yahoo Finance
-            nifty_data = yf.Ticker("^NSEI").history(period=period)
-            
-            # Make sure we have data
-            if nifty_data.empty:
-                st.error("No historical data found for Nifty 50")
-                return None
-                
-            # Rename columns to match our format (capitalized)
-            nifty_data = nifty_data.rename(columns={
-                'Open': 'Open',
-                'High': 'High',
-                'Low': 'Low',
-                'Close': 'Close',
-                'Volume': 'Volume'
-            })
-            
-            st.session_state.stock_data_cache['^NSEI'] = {
-                'history': nifty_data,
-                'quote': {'last_price': nifty_data['Close'].iloc[-1]},
-                'info': {}
-            }
-            return nifty_data
+        # Rename columns to match our format (capitalized)
+        nifty_data = nifty_data.rename(columns={
+            'Open': 'Open',
+            'High': 'High',
+            'Low': 'Low',
+            'Close': 'Close',
+            'Volume': 'Volume'
+        })
         
         st.session_state.stock_data_cache['^NSEI'] = {
-            'history': historical_data,
-            'quote': quote_data,
+            'history': nifty_data,
+            'quote': {'last_price': nifty_data['Close'].iloc[-1]},
             'info': {}
         }
-        
-        return historical_data
+        return nifty_data
     except Exception as e:
         st.error(f"Error fetching Nifty data: {str(e)}")
         return None
@@ -1076,7 +873,7 @@ elif page == "Add Stock":
                     with st.spinner(f"Fetching data for {symbol}..."):
                         # Add delay between requests to avoid rate limiting
                         if i > 0:
-                            time.sleep(1)  # Wait 1 second between requests
+                            time.sleep(2)  # Increased wait time to 2 seconds between requests
                             
                         stock_data = get_stock_data(symbol)
                         
