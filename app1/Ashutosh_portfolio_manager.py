@@ -653,7 +653,11 @@ def generate_recommendation(goverdhan, oliver, relative_strength, garp):
         return "hold"
 
 # Function to add stock to portfolio
-def add_to_portfolio(symbol, quantity, price):
+def add_to_portfolio(symbol, quantity, price, purchase_date=None):
+    # Set default purchase date if not provided
+    if purchase_date is None:
+        purchase_date = datetime.now().strftime('%Y-%m-%d')
+    
     # Check if stock already exists in portfolio
     for i, stock in enumerate(st.session_state.portfolio):
         if stock['symbol'] == symbol:
@@ -666,7 +670,7 @@ def add_to_portfolio(symbol, quantity, price):
                 'symbol': symbol,
                 'quantity': total_quantity,
                 'avg_price': avg_price,
-                'purchase_date': datetime.now().strftime('%Y-%m-%d')
+                'purchase_date': purchase_date
             }
             # Save portfolio data
             save_portfolio_data()
@@ -677,7 +681,7 @@ def add_to_portfolio(symbol, quantity, price):
         'symbol': symbol,
         'quantity': quantity,
         'avg_price': price,
-        'purchase_date': datetime.now().strftime('%Y-%m-%d')
+        'purchase_date': purchase_date
     })
     # Save portfolio data
     save_portfolio_data()
@@ -920,80 +924,41 @@ if page == "Portfolio":
 elif page == "Add Stock":
     st.title("Add Stock to Portfolio")
     
-    # Get stock list
-    stock_list = get_stock_list()
+    # Tab for single stock vs multiple stocks
+    tab1, tab2 = st.tabs(["Add Single Stock", "Add Multiple Stocks"])
     
-    # Search box
-    search_term = st.text_input("Search for a stock", "")
-    
-    # Filter stocks based on search
-    filtered_stocks = [stock for stock in stock_list if search_term.lower() in stock['name'].lower() or search_term.upper() in stock['symbol']]
-    
-    # Display filtered stocks
-    if filtered_stocks:
-        st.write(f"Found {len(filtered_stocks)} stocks:")
+    with tab1:
+        # Get stock list
+        stock_list = get_stock_list()
         
-        # Create a dataframe for display
-        stock_df = pd.DataFrame(filtered_stocks)
-        st.dataframe(
-            stock_df[['symbol', 'name', 'exchange']],
-            use_container_width=True,
-            hide_index=True
-        )
+        # Search box
+        search_term = st.text_input("Search for a stock", "")
         
-        # Select stock
-        selected_stock = st.selectbox("Select a stock to add", [stock['symbol'] for stock in filtered_stocks])
+        # Filter stocks based on search
+        filtered_stocks = [stock for stock in stock_list if search_term.lower() in stock['name'].lower() or search_term.upper() in stock['symbol']]
         
-        # Get stock details
-        stock_data = get_stock_data(selected_stock)
-        if stock_data and 'quote' in stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
-            current_price = stock_data['quote']['last_price']
+        # Display filtered stocks
+        if filtered_stocks:
+            st.write(f"Found {len(filtered_stocks)} stocks:")
             
-            # Display stock chart
-            st.subheader(f"{selected_stock} - Price Chart")
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=stock_data['history'].index,
-                open=stock_data['history']['Open'],
-                high=stock_data['history']['High'],
-                low=stock_data['history']['Low'],
-                close=stock_data['history']['Close'],
-                name=selected_stock
-            ))
-            fig.update_layout(
-                title=f"{selected_stock} Price History",
-                xaxis_title="Date",
-                yaxis_title="Price (₹)",
-                height=400
+            # Create a dataframe for display
+            stock_df = pd.DataFrame(filtered_stocks)
+            st.dataframe(
+                stock_df[['symbol', 'name', 'exchange']],
+                use_container_width=True,
+                hide_index=True
             )
-            st.plotly_chart(fig, use_container_width=True)
             
-            # Add stock form
-            st.subheader("Add to Portfolio")
-            with st.form("add_stock_form"):
-                quantity = st.number_input("Quantity", min_value=1, value=1)
-                # Format the current price to 2 decimal places for the input field
-                price = st.number_input("Price (₹)", min_value=0.01, value=float(round(current_price, 2)), format="%.2f")
-                submit_button = st.form_submit_button("Add to Portfolio")
-                
-                if submit_button:
-                    add_to_portfolio(selected_stock, quantity, price)
-                    st.success(f"Added {quantity} shares of {selected_stock} at ₹{price:.2f} to your portfolio.")
-        else:
-            st.error("Could not fetch stock data. Please try another stock.")
-    else:
-        # If no stocks found in predefined list, try to get from Yahoo Finance
-        if search_term:
-            st.write(f"Stock '{search_term}' not found in predefined list. Trying to fetch from Yahoo Finance...")
+            # Select stock
+            selected_stock = st.selectbox("Select a stock to add", [stock['symbol'] for stock in filtered_stocks])
             
-            # Try to get stock data from Yahoo Finance
-            stock_data = get_stock_data_yahoo(search_term)
-            
-            if stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
-                st.success(f"Found data for {search_term} from Yahoo Finance")
+            # Get stock details
+            stock_data = get_stock_data(selected_stock)
+            if stock_data and 'quote' in stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
+                current_price = stock_data['quote']['last_price']
                 
                 # Display stock chart
-                st.subheader(f"{search_term} - Price Chart")
+                st.subheader(f"{selected_stock} - Price Chart")
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(
                     x=stock_data['history'].index,
@@ -1001,10 +966,10 @@ elif page == "Add Stock":
                     high=stock_data['history']['High'],
                     low=stock_data['history']['Low'],
                     close=stock_data['history']['Close'],
-                    name=search_term
+                    name=selected_stock
                 ))
                 fig.update_layout(
-                    title=f"{search_term} Price History",
+                    title=f"{selected_stock} Price History",
                     xaxis_title="Date",
                     yaxis_title="Price (₹)",
                     height=400
@@ -1013,19 +978,141 @@ elif page == "Add Stock":
                 
                 # Add stock form
                 st.subheader("Add to Portfolio")
-                with st.form("add_stock_form_yahoo"):
+                with st.form("add_stock_form"):
                     quantity = st.number_input("Quantity", min_value=1, value=1)
                     # Format the current price to 2 decimal places for the input field
-                    price = st.number_input("Price (₹)", min_value=0.01, value=float(round(stock_data['quote']['last_price'], 2)), format="%.2f")
+                    price = st.number_input("Price (₹)", min_value=0.01, value=float(round(current_price, 2)), format="%.2f")
+                    purchase_date = st.date_input("Purchase Date", value=datetime.now().date())
                     submit_button = st.form_submit_button("Add to Portfolio")
                     
                     if submit_button:
-                        add_to_portfolio(search_term, quantity, price)
-                        st.success(f"Added {quantity} shares of {search_term} at ₹{price:.2f} to your portfolio.")
+                        add_to_portfolio(selected_stock, quantity, price, purchase_date.strftime('%Y-%m-%d'))
+                        st.success(f"Added {quantity} shares of {selected_stock} at ₹{price:.2f} to your portfolio.")
             else:
-                st.error(f"Could not fetch data for '{search_term}'. Please check the stock symbol and try again.")
+                st.error("Could not fetch stock data. Please try another stock.")
         else:
-            st.info("No stocks found. Try a different search term.")
+            # If no stocks found in predefined list, try to get from Yahoo Finance
+            if search_term:
+                st.write(f"Stock '{search_term}' not found in predefined list. Trying to fetch from Yahoo Finance...")
+                
+                # Try to get stock data from Yahoo Finance
+                stock_data = get_stock_data_yahoo(search_term)
+                
+                if stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
+                    st.success(f"Found data for {search_term} from Yahoo Finance")
+                    
+                    # Display stock chart
+                    st.subheader(f"{search_term} - Price Chart")
+                    fig = go.Figure()
+                    fig.add_trace(go.Candlestick(
+                        x=stock_data['history'].index,
+                        open=stock_data['history']['Open'],
+                        high=stock_data['history']['High'],
+                        low=stock_data['history']['Low'],
+                        close=stock_data['history']['Close'],
+                        name=search_term
+                    ))
+                    fig.update_layout(
+                        title=f"{search_term} Price History",
+                        xaxis_title="Date",
+                        yaxis_title="Price (₹)",
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Add stock form
+                    st.subheader("Add to Portfolio")
+                    with st.form("add_stock_form_yahoo"):
+                        quantity = st.number_input("Quantity", min_value=1, value=1)
+                        # Format the current price to 2 decimal places for the input field
+                        price = st.number_input("Price (₹)", min_value=0.01, value=float(round(stock_data['quote']['last_price'], 2)), format="%.2f")
+                        purchase_date = st.date_input("Purchase Date", value=datetime.now().date())
+                        submit_button = st.form_submit_button("Add to Portfolio")
+                        
+                        if submit_button:
+                            add_to_portfolio(search_term, quantity, price, purchase_date.strftime('%Y-%m-%d'))
+                            st.success(f"Added {quantity} shares of {search_term} at ₹{price:.2f} to your portfolio.")
+                else:
+                    st.error(f"Could not fetch data for '{search_term}'. Please check the stock symbol and try again.")
+            else:
+                st.info("No stocks found. Try a different search term.")
+    
+    with tab2:
+        st.subheader("Add Multiple Stocks")
+        st.write("Paste multiple stock symbols (one per line) and we'll fetch their data:")
+        
+        # Text area for multiple stock symbols
+        stock_symbols = st.text_area("Stock Symbols", height=150, 
+                                     help="Enter one stock symbol per line (e.g., RELIANCE, TCS, HDFCBANK)")
+        
+        if stock_symbols:
+            # Parse symbols
+            symbols = [symbol.strip().upper() for symbol in stock_symbols.split('\n') if symbol.strip()]
+            
+            if symbols:
+                st.write(f"Found {len(symbols)} stock symbols:")
+                
+                # Create a dataframe to store stock data
+                stocks_data = []
+                
+                # Fetch data for each symbol
+                for symbol in symbols:
+                    with st.spinner(f"Fetching data for {symbol}..."):
+                        stock_data = get_stock_data(symbol)
+                        
+                        if stock_data and 'quote' in stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
+                            current_price = stock_data['quote']['last_price']
+                            stocks_data.append({
+                                'symbol': symbol,
+                                'current_price': round(current_price, 2),
+                                'data': stock_data
+                            })
+                        else:
+                            st.warning(f"Could not fetch data for {symbol}")
+                
+                if stocks_data:
+                    # Display stocks in a dataframe
+                    stocks_df = pd.DataFrame(stocks_data)
+                    st.dataframe(
+                        stocks_df[['symbol', 'current_price']],
+                        use_container_width=True,
+                        column_config={
+                            "symbol": "Stock Symbol",
+                            "current_price": st.column_config.NumberColumn("Current Price (₹)", format="₹%.2f")
+                        }
+                    )
+                    
+                    # Add stocks form
+                    st.subheader("Add to Portfolio")
+                    with st.form("add_multiple_stocks_form"):
+                        # Default purchase date is today
+                        purchase_date = st.date_input("Purchase Date", value=datetime.now().date())
+                        
+                        st.write("Enter quantity for each stock:")
+                        
+                        # Create input fields for each stock
+                        quantities = {}
+                        for stock in stocks_data:
+                            quantities[stock['symbol']] = st.number_input(
+                                f"Quantity for {stock['symbol']} (Current Price: ₹{stock['current_price']})",
+                                min_value=1, value=1, key=f"qty_{stock['symbol']}"
+                            )
+                        
+                        submit_button = st.form_submit_button("Add All Stocks to Portfolio")
+                        
+                        if submit_button:
+                            success_count = 0
+                            for stock in stocks_data:
+                                symbol = stock['symbol']
+                                quantity = quantities[symbol]
+                                price = stock['current_price']
+                                
+                                add_to_portfolio(symbol, quantity, price, purchase_date.strftime('%Y-%m-%d'))
+                                success_count += 1
+                            
+                            st.success(f"Successfully added {success_count} stocks to your portfolio!")
+                else:
+                    st.error("Could not fetch data for any of the provided stock symbols.")
 
 # Sell Stock Page (NEW)
 elif page == "Sell Stock":
