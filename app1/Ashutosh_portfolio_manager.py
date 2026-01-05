@@ -114,7 +114,7 @@ load_portfolio_data()
 load_transactions_data()
 
 # Function to get historical data from Upstox (fixed based on official documentation)
-def get_historical_data_upstox(instrument_key, interval='1day', from_date=None, to_date=None):
+def get_historical_data_upstox(instrument_key, interval='day', from_date=None, to_date=None):
     try:
         if from_date is None:
             from_date = datetime.now() - timedelta(days=1460)  # 4 years
@@ -127,6 +127,7 @@ def get_historical_data_upstox(instrument_key, interval='1day', from_date=None, 
         to_date_str = to_date.strftime('%Y-%m-%d')
         
         # Build URL according to Upstox API documentation
+        # Fixed: changed '1day' to 'day' as per API requirements
         url = f"{BASE_URL}/historical-candle/{instrument_key}/{interval}/{to_date_str}/{from_date_str}"
         
         response = requests.get(url, headers=headers)
@@ -186,47 +187,61 @@ def get_quote_data_upstox(instrument_key):
         st.error(f"Error getting quote data from Upstox: {str(e)}")
         return None
 
-# Function to get stock data from Yahoo Finance
-def get_stock_data_yahoo(symbol, period="4y"):
-    try:
-        # Add .NS for NSE stocks
-        ticker = yf.Ticker(f"{symbol}.NS")
-        hist_data = ticker.history(period=period)
-        
-        # Get current info
-        info = ticker.info
-        
-        # Make sure we have data
-        if hist_data.empty:
-            st.error(f"No historical data found for {symbol}")
-            return None
-        
-        # Rename columns to match our format (capitalized)
-        hist_data = hist_data.rename(columns={
-            'Open': 'Open',
-            'High': 'High',
-            'Low': 'Low',
-            'Close': 'Close',
-            'Volume': 'Volume'
-        })
-        
-        # Create a quote-like structure
-        quote_data = {
-            'last_price': hist_data['Close'].iloc[-1],
-            'open_price': hist_data['Open'].iloc[-1],
-            'high_price': hist_data['High'].iloc[-1],
-            'low_price': hist_data['Low'].iloc[-1],
-            'volume': hist_data['Volume'].iloc[-1]
-        }
-        
-        return {
-            'history': hist_data,
-            'quote': quote_data,
-            'info': info
-        }
-    except Exception as e:
-        st.error(f"Error fetching data from Yahoo Finance for {symbol}: {str(e)}")
-        return None
+# Function to get stock data from Yahoo Finance with retry mechanism
+def get_stock_data_yahoo(symbol, period="4y", max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            # Add .NS for NSE stocks
+            ticker = yf.Ticker(f"{symbol}.NS")
+            hist_data = ticker.history(period=period)
+            
+            # Get current info
+            info = ticker.info
+            
+            # Make sure we have data
+            if hist_data.empty:
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait before retry
+                    continue
+                st.error(f"No historical data found for {symbol}")
+                return None
+            
+            # Rename columns to match our format (capitalized)
+            hist_data = hist_data.rename(columns={
+                'Open': 'Open',
+                'High': 'High',
+                'Low': 'Low',
+                'Close': 'Close',
+                'Volume': 'Volume'
+            })
+            
+            # Create a quote-like structure
+            quote_data = {
+                'last_price': hist_data['Close'].iloc[-1],
+                'open_price': hist_data['Open'].iloc[-1],
+                'high_price': hist_data['High'].iloc[-1],
+                'low_price': hist_data['Low'].iloc[-1],
+                'volume': hist_data['Volume'].iloc[-1]
+            }
+            
+            return {
+                'history': hist_data,
+                'quote': quote_data,
+                'info': info
+            }
+        except Exception as e:
+            if "Too Many Requests" in str(e) and attempt < max_retries - 1:
+                # Exponential backoff for rate limiting
+                wait_time = 2 ** attempt
+                st.warning(f"Rate limited by Yahoo Finance. Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+                continue
+            elif attempt < max_retries - 1:
+                time.sleep(1)  # Brief wait before retry
+                continue
+            else:
+                st.error(f"Error fetching data from Yahoo Finance for {symbol}: {str(e)}")
+                return None
 
 # Function to get fundamental data from Yahoo Finance (replacing MoneyControl)
 def get_fundamental_data_yahoo(symbol):
@@ -296,9 +311,10 @@ def get_stock_data(symbol, period="4y"):
             instrument_key = INSTRUMENT_KEYS[symbol]
             
             # Fetch historical data
+            # Fixed: changed '1day' to 'day' as per API requirements
             historical_data = get_historical_data_upstox(
                 instrument_key=instrument_key,
-                interval='1day',  # Fixed: use '1day' as per Upstox API
+                interval='day',  # Fixed: use 'day' as per Upstox API
                 from_date=datetime.now() - timedelta(days=1460),
                 to_date=datetime.now()
             )
@@ -730,7 +746,7 @@ def get_nifty_data(period="4y"):
         # Try to get from Upstox first
         historical_data = get_historical_data_upstox(
             instrument_key=NIFTY_INSTRUMENT_KEY,
-            interval='1day',
+            interval='day',  # Fixed: use 'day' as per Upstox API
             from_date=datetime.now() - timedelta(days=1460),
             to_date=datetime.now()
         )
@@ -1055,9 +1071,13 @@ elif page == "Add Stock":
                 # Create a dataframe to store stock data
                 stocks_data = []
                 
-                # Fetch data for each symbol
-                for symbol in symbols:
+                # Fetch data for each symbol with delay to avoid rate limiting
+                for i, symbol in enumerate(symbols):
                     with st.spinner(f"Fetching data for {symbol}..."):
+                        # Add delay between requests to avoid rate limiting
+                        if i > 0:
+                            time.sleep(1)  # Wait 1 second between requests
+                            
                         stock_data = get_stock_data(symbol)
                         
                         if stock_data and 'quote' in stock_data and 'history' in stock_data and stock_data['history'] is not None and not stock_data['history'].empty:
