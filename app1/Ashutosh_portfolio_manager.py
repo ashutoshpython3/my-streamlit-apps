@@ -73,35 +73,27 @@ load_transactions_data()
 
 # Function to get stock data from Yahoo Finance with improved retry mechanism
 def get_stock_data_yahoo(symbol, period="4y", max_retries=5):
+    # Ensure the symbol ends with .NS for Indian stocks
+    if not symbol.endswith('.NS'):
+        symbol = f"{symbol}.NS"
+
     for attempt in range(max_retries):
         try:
-            # Add .NS for NSE stocks
-            ticker = yf.Ticker(f"{symbol}.NS")
+            ticker = yf.Ticker(symbol)
             hist_data = ticker.history(period=period)
             
-            # Get current info
-            info = ticker.info
-            
-            # Make sure we have data
+            # Check if data is empty
             if hist_data.empty:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
-                    st.warning(f"No data found for {symbol}. Waiting {wait_time} seconds before retry...")
+                    st.warning(f"No data found for {symbol}. Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
                 st.error(f"No historical data found for {symbol}")
                 return None
             
-            # Rename columns to match our format (capitalized)
-            hist_data = hist_data.rename(columns={
-                'Open': 'Open',
-                'High': 'High',
-                'Low': 'Low',
-                'Close': 'Close',
-                'Volume': 'Volume'
-            })
-            
-            # Create a quote-like structure
+            # Process data
+            hist_data = hist_data.rename(columns={'Open': 'Open', 'High': 'High', 'Low': 'Low', 'Close': 'Close', 'Volume': 'Volume'})
             quote_data = {
                 'last_price': hist_data['Close'].iloc[-1],
                 'open_price': hist_data['Open'].iloc[-1],
@@ -113,21 +105,19 @@ def get_stock_data_yahoo(symbol, period="4y", max_retries=5):
             return {
                 'history': hist_data,
                 'quote': quote_data,
-                'info': info
+                'info': ticker.info
             }
+        
         except Exception as e:
             if "Too Many Requests" in str(e) and attempt < max_retries - 1:
-                # Exponential backoff for rate limiting
                 wait_time = 2 ** attempt
-                st.warning(f"Rate limited by Yahoo Finance. Waiting {wait_time} seconds before retry...")
+                st.warning(f"Rate limited by Yahoo Finance. Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
-            elif attempt < max_retries - 1:
-                time.sleep(1)  # Brief wait before retry
-                continue
             else:
-                st.error(f"Error fetching data from Yahoo Finance for {symbol}: {str(e)}")
+                st.error(f"Error fetching data for {symbol}: {str(e)}")
                 return None
+
 
 # Function to get fundamental data from Yahoo Finance
 def get_fundamental_data_yahoo(symbol):
