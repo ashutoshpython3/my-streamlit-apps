@@ -169,9 +169,11 @@ with tab1:
                     status = "🔴 SELL"
                     reason = "Trend Weakness: Closed below Upper BB (20, 0.6)."
 
+                # Moving "Signal Status" and "Guidance" to the top of the dictionary makes them the first columns
                 active_rows.append({
-                    "ID": trade["id"],
+                    "Signal Status": status,
                     "Ticker": t_symbol,
+                    "Guidance": reason,
                     "Date Bought": trade["buy_date"],
                     "Qty": trade["qty"],
                     "Buy Price (₹)": round(trade["buy_price"], 2),
@@ -181,8 +183,7 @@ with tab1:
                     "Current Value (₹)": round(value, 2),
                     "PnL (₹)": round(pnl, 2),
                     "Return (%)": round(pnl_pct, 2),
-                    "Signal Status": status,
-                    "Guidance": reason
+                    "ID": trade["id"]  # Hidden column used for tracking references
                 })
 
         if active_rows:
