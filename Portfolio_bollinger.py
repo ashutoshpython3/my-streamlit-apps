@@ -27,27 +27,54 @@ if "db" not in st.session_state:
 
 db = st.session_state.db
 
+def resolve_ticker(user_input):
+    """
+    Searches Yahoo Finance to find the closest ticker symbol match.
+    Allows users to pass raw names like 'RELIANCE' instead of 'RELIANCE.NS'.
+    """
+    if not user_input:
+        return None
+    try:
+        search_results = yf.Search(user_input, max_results=3).quotes
+        if search_results:
+            # Grab the symbol of the first matching query result
+            resolved_symbol = search_results[0]['symbol']
+            return resolved_symbol.upper().strip()
+    except Exception:
+        pass
+    return user_input.upper().strip()
+
 # --- APP HEADER ---
-st.title("📊 Ashutosh bollinger Portfolio & Performance Analytics")
+st.title("📊 Ashutosh Bollinger Portfolio & Performance Analytics")
 st.markdown("Track exit signals below the **Upper Bollinger Band (20, 0.6)** and evaluate your historical monthly returns.")
 st.markdown("---")
 
-# --- SIDEBAR: TRANSACTION MANAGEMENT (CLEANED) ---
+# --- SIDEBAR: TRANSACTION MANAGEMENT ---
 st.sidebar.header("🛒 Log New Position")
 
-ticker_input = st.sidebar.text_input("1. Stock Ticker (e.g., RELIANCE.NS, INFIBEAM.NS)").upper().strip()
+raw_ticker_input = st.sidebar.text_input("1. Stock Name / Ticker (e.g., RELIANCE, INFIBEAM, AAPL)").strip()
 
 fetched_price = 0.0
-if ticker_input:
+resolved_ticker_symbol = ""
+
+if raw_ticker_input:
     try:
-        # FIX: Changed from st.sidebar.spinner to st.spinner
-        with st.spinner(f"Fetching quotes for {ticker_input}..."):
-            ticker_df = yf.download(ticker_input, period="5d", progress=False)
-            if not ticker_df.empty:
-                fetched_price = float(ticker_df['Close'].iloc[-1])
-                st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
+        with st.spinner(f"Searching and fetching quotes for '{raw_ticker_input}'..."):
+            resolved_ticker_symbol = resolve_ticker(raw_ticker_input)
+            
+            if resolved_ticker_symbol:
+                st.sidebar.caption(f"Resolved to system symbol: **{resolved_ticker_symbol}**")
+                ticker_obj = yf.Ticker(resolved_ticker_symbol)
+                ticker_df = ticker_obj.history(period="5d")
+                
+                if not ticker_df.empty:
+                    last_close = ticker_df['Close'].squeeze().iloc[-1]
+                    fetched_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
+                    st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
+                else:
+                    st.sidebar.warning("Failed to resolve asset price asset dataframe.")
             else:
-                st.sidebar.warning("Failed to resolve asset price.")
+                st.sidebar.error("Could not find matching asset.")
     except Exception as e:
         st.sidebar.error(f"Error fetching: {e}")
 
@@ -57,23 +84,22 @@ with st.sidebar.form("buy_form", clear_on_submit=True):
     qty = st.number_input("Quantity", min_value=1, step=1, value=10)
     buy_date = st.date_input("Purchase Date", max_value=datetime.today())
     
-    # FIX: Combined with st.form_submit_button to attach correctly to form context
     submitted = st.form_submit_button("Deploy Position")
     if submitted:
-        if ticker_input:
+        if resolved_ticker_symbol:
             new_trade = {
                 "id": str(int(datetime.now().timestamp())),
-                "ticker": ticker_input,
+                "ticker": resolved_ticker_symbol,
                 "qty": int(qty),
                 "buy_price": float(buy_price),
                 "buy_date": str(buy_date)
             }
             db["active"].append(new_trade)
             save_db(db)
-            st.sidebar.success(f"Deployed {ticker_input} position successfully!")
+            st.sidebar.success(f"Deployed {resolved_ticker_symbol} position successfully!")
             st.rerun()
         else:
-            st.sidebar.error("Valid ticker symbol required.")
+            st.sidebar.error("Valid ticker symbol or asset search target required.")
 
 # --- TABS FOR ORGANIZED LAYOUT ---
 tab1, tab2, tab3 = st.tabs(["⚡ Live Positions & Tracking", "📈 Performance Analytics", "⚙️ Position Modification"])
@@ -93,16 +119,26 @@ with tab1:
         with st.spinner("Processing technical indicators..."):
             for t in unique_tickers:
                 try:
-                    df = yf.download(t, period="3mo", interval="1d", progress=False)
+                    ticker_obj = yf.Ticker(t)
+                    df = ticker_obj.history(period="3mo", interval="1d")
+                    
                     if not df.empty and len(df) >= 20:
-                        df['SMA20'] = df['Close'].rolling(window=20).mean()
-                        df['STD20'] = df['Close'].rolling(window=20).std()
+                        close_series = df['Close'].squeeze()
+                        
+                        df['SMA20'] = close_series.rolling(window=20).mean()
+                        df['STD20'] = close_series.rolling(window=20).std()
                         # Upper Bollinger Band formula using 0.6 standard deviations
                         df['Upper_BB_06'] = df['SMA20'] + (0.6 * df['STD20'])
                         
+                        last_close = df['Close'].squeeze().iloc[-1]
+                        last_bb = df['Upper_BB_06'].squeeze().iloc[-1]
+                        
+                        current_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
+                        upper_bb = float(last_bb.item()) if hasattr(last_bb, 'item') else float(last_bb)
+                        
                         live_market_data[t] = {
-                            "current_price": float(df['Close'].iloc[-1]),
-                            "upper_bb": float(df['Upper_BB_06'].iloc[-1])
+                            "current_price": current_price,
+                            "upper_bb": upper_bb
                         }
                 except Exception as e:
                     st.error(f"Indicator calculation error for {t}: {e}")
