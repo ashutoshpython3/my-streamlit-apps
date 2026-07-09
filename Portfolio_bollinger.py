@@ -1,31 +1,96 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import json
-import os
 from datetime import datetime
+from supabase import create_client, Client
 
 # --- CONFIGURATION & DATABASE ENGINE ---
 st.set_page_config(page_title="Alpha Bollinger Portfolio", layout="wide", page_icon="📊")
-DB_FILE = "portfolio_advanced_db.json"
 
-def load_db():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {"active": [], "history": []}
-    return {"active": [], "history": []}
+# Initialize Supabase client
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+supabase = init_supabase()
 
-if "db" not in st.session_state:
-    st.session_state.db = load_db()
+# --- DATABASE FUNCTIONS ---
+def load_active_positions():
+    """Load all active positions from Supabase"""
+    try:
+        response = supabase.table("active_positions").select("*").order("created_at", desc=True).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error loading positions: {e}")
+        return []
 
-db = st.session_state.db
+def load_closed_positions():
+    """Load all closed positions from Supabase"""
+    try:
+        response = supabase.table("closed_positions").select("*").order("created_at", desc=True).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Error loading history: {e}")
+        return []
+
+def add_active_position(trade_data):
+    """Add new position to Supabase"""
+    try:
+        supabase.table("active_positions").insert(trade_data).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error adding position: {e}")
+        return False
+
+def close_position(trade_id, sell_price, sell_date):
+    """Move position from active to closed"""
+    try:
+        # Get the active position
+        response = supabase.table("active_positions").select("*").eq("id", trade_id).execute()
+        if not response.data:
+            return False
+        
+        position = response.data[0]
+        
+        # Create closed position record
+        closed_data = {
+            "id": position["id"],
+            "ticker": position["ticker"],
+            "qty": position["qty"],
+            "buy_price": position["buy_price"],
+            "buy_date": position["buy_date"],
+            "sell_price": sell_price,
+            "sell_date": sell_date
+        }
+        supabase.table("closed_positions").insert(closed_data).execute()
+        
+        # Delete from active
+        supabase.table("active_positions").delete().eq("id", trade_id).execute()
+        
+        return True
+    except Exception as e:
+        st.error(f"Error closing position: {e}")
+        return False
+
+def update_position(trade_id, qty, buy_price):
+    """Update an existing active position"""
+    try:
+        supabase.table("active_positions").update({
+            "qty": qty,
+            "buy_price": buy_price
+        }).eq("id", trade_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating position: {e}")
+        return False
+
+# --- LOAD DATA ---
+if "active" not in st.session_state:
+    st.session_state.active = load_active_positions()
+if "history" not in st.session_state:
+    st.session_state.history = load_closed_positions()
 
 def resolve_ticker(user_input):
     """
@@ -37,7 +102,6 @@ def resolve_ticker(user_input):
     try:
         search_results = yf.Search(user_input, max_results=3).quotes
         if search_results:
-            # Grab the symbol of the first matching query result
             resolved_symbol = search_results[0]['symbol']
             return resolved_symbol.upper().strip()
     except Exception:
@@ -94,10 +158,10 @@ with st.sidebar.form("buy_form", clear_on_submit=True):
                 "buy_price": float(buy_price),
                 "buy_date": str(buy_date)
             }
-            db["active"].append(new_trade)
-            save_db(db)
-            st.sidebar.success(f"Deployed {resolved_ticker_symbol} position successfully!")
-            st.rerun()
+            if add_active_position(new_trade):
+                st.session_state.active = load_active_positions()
+                st.sidebar.success(f"Deployed {resolved_ticker_symbol} position successfully!")
+                st.rerun()
         else:
             st.sidebar.error("Valid ticker symbol or asset search target required.")
 
@@ -110,10 +174,12 @@ tab1, tab2, tab3 = st.tabs(["⚡ Live Positions & Tracking", "📈 Performance A
 with tab1:
     st.header("Active Monitor Dashboard")
     
-    if not db["active"]:
+    active_positions = st.session_state.active
+    
+    if not active_positions:
         st.info("No active holdings found. Log a transaction via the sidebar.")
     else:
-        unique_tickers = list(set([trade["ticker"] for trade in db["active"]]))
+        unique_tickers = list(set([trade["ticker"] for trade in active_positions]))
         live_market_data = {}
         
         with st.spinner("Processing technical indicators..."):
@@ -127,7 +193,6 @@ with tab1:
                         
                         df['SMA20'] = close_series.rolling(window=20).mean()
                         df['STD20'] = close_series.rolling(window=20).std()
-                        # Upper Bollinger Band formula using 0.6 standard deviations
                         df['Upper_BB_06'] = df['SMA20'] + (0.6 * df['STD20'])
                         
                         last_close = df['Close'].squeeze().iloc[-1]
@@ -146,7 +211,7 @@ with tab1:
         active_rows = []
         total_value, total_cost = 0.0, 0.0
         
-        for trade in db["active"]:
+        for trade in active_positions:
             t_symbol = trade["ticker"]
             m_data = live_market_data.get(t_symbol)
             
@@ -169,7 +234,6 @@ with tab1:
                     status = "🔴 SELL"
                     reason = "Trend Weakness: Closed below Upper BB (20, 0.6)."
 
-                # Moving "Signal Status" and "Guidance" to the top of the dictionary makes them the first columns
                 active_rows.append({
                     "Signal Status": status,
                     "Ticker": t_symbol,
@@ -183,7 +247,7 @@ with tab1:
                     "Current Value (₹)": round(value, 2),
                     "PnL (₹)": round(pnl, 2),
                     "Return (%)": round(pnl_pct, 2),
-                    "ID": trade["id"]  # Hidden column used for tracking references
+                    "ID": trade["id"]
                 })
 
         if active_rows:
@@ -212,6 +276,9 @@ with tab1:
                 use_container_width=True, hide_index=True
             )
             
+            # Store active_df in session state for other tabs
+            st.session_state.active_df = active_df
+            
             # --- LIQUIDATION INTERFACE ---
             st.markdown("---")
             st.subheader("⚡ Close Out Tracked Position")
@@ -226,15 +293,11 @@ with tab1:
                 realized_sell_date = st.date_input("Exit Settlement Execution Date", max_value=datetime.today())
                 
             if st.button("Execute Sale Settlement", type="primary"):
-                idx = next(i for i, item in enumerate(db["active"]) if item["id"] == target_sell_id)
-                closed_trade = db["active"].pop(idx)
-                closed_trade["sell_price"] = float(realized_sell_price)
-                closed_trade["sell_date"] = str(realized_sell_date)
-                
-                db["history"].append(closed_trade)
-                save_db(db)
-                st.success("Asset position moved into historical ledger.")
-                st.rerun()
+                if close_position(target_sell_id, float(realized_sell_price), str(realized_sell_date)):
+                    st.session_state.active = load_active_positions()
+                    st.session_state.history = load_closed_positions()
+                    st.success("Asset position moved into historical ledger.")
+                    st.rerun()
 
 # ==========================================
 # TAB 2: HISTORICAL RETURN ANALYTICS
@@ -242,11 +305,11 @@ with tab1:
 with tab2:
     st.header("📈 Calendar Performance Analytics")
     
-    if not db["history"]:
+    if not st.session_state.history:
         st.info("Log closed trades from active tracking to generate historical performance calculations.")
     else:
         hist_rows = []
-        for h in db["history"]:
+        for h in st.session_state.history:
             cost = h["qty"] * h["buy_price"]
             rev = h["qty"] * h["sell_price"]
             net = rev - cost
@@ -294,7 +357,7 @@ with tab2:
             "Date Bought": x["buy_date"], "Buy Price (₹)": x["buy_price"],
             "Date Sold": x["sell_date"], "Sell Price (₹)": x["sell_price"],
             "Net Profit (₹)": (x["qty"] * x["sell_price"]) - (x["qty"] * x["buy_price"])
-        } for x in db["history"]])
+        } for x in st.session_state.history])
         
         st.dataframe(display_hist_df, use_container_width=True, hide_index=True)
 
@@ -303,25 +366,33 @@ with tab2:
 # ==========================================
 with tab3:
     st.header("🔧 Correct Existing Entry Data")
-    if not db["active"]:
+    
+    active_positions = st.session_state.active
+    
+    if not active_positions:
         st.info("No active entries are available for modification.")
     else:
-        edit_opts = {f"{r['Ticker']} ({r['Qty']} shares bought on {r['Date Bought']})": r['ID'] for i, r in active_df.iterrows()}
+        # Need to rebuild active_df for this tab if not available
+        if "active_df" not in st.session_state or st.session_state.active_df.empty:
+            edit_opts = {f"{r['ticker']} ({r['qty']} shares bought on {r['buy_date']})": r['id'] for r in active_positions}
+        else:
+            edit_opts = {f"{r['Ticker']} ({r['Qty']} shares bought on {r['Date Bought']})": r['ID'] for i, r in st.session_state.active_df.iterrows()}
+        
         sel_edit_label = st.selectbox("Select entity position to adjust fields:", options=list(edit_opts.keys()))
         target_edit_id = edit_opts[sel_edit_label]
         
-        edit_idx = next(i for i, x in enumerate(db["active"]) if x["id"] == target_edit_id)
-        curr_edit = db["active"][edit_idx]
+        # Find the position from original data
+        curr_edit = next((x for x in active_positions if x["id"] == target_edit_id), None)
         
-        col_e1, col_e2 = st.columns(2)
-        with col_e1:
-            m_qty = st.number_input("Update Quantity", min_value=1, step=1, value=int(curr_edit["qty"]))
-        with col_e2:
-            m_prc = st.number_input("Update Purchase Price (₹)", min_value=0.01, step=0.1, value=float(curr_edit["buy_price"]))
-            
-        if st.button("Save Strategic Overwrites", type="secondary"):
-            db["active"][edit_idx]["qty"] = int(m_qty)
-            db["active"][edit_idx]["buy_price"] = float(m_prc)
-            save_db(db)
-            st.success("Entry details successfully updated.")
-            st.rerun()
+        if curr_edit:
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                m_qty = st.number_input("Update Quantity", min_value=1, step=1, value=int(curr_edit["qty"]))
+            with col_e2:
+                m_prc = st.number_input("Update Purchase Price (₹)", min_value=0.01, step=0.1, value=float(curr_edit["buy_price"]))
+                
+            if st.button("Save Strategic Overwrites", type="secondary"):
+                if update_position(target_edit_id, int(m_qty), float(m_prc)):
+                    st.session_state.active = load_active_positions()
+                    st.success("Entry details successfully updated.")
+                    st.rerun()
