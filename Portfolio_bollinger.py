@@ -151,19 +151,30 @@ if raw_ticker_input:
             if resolved_ticker_symbol:
                 st.sidebar.caption(f"Resolved to system symbol: **{resolved_ticker_symbol}**")
                 ticker_obj = yf.Ticker(resolved_ticker_symbol)
-                ticker_df = ticker_obj.history(period="5d")
                 
-                # --- FIX 1: Flatten yfinance MultiIndex headers if they exist ---
-                if isinstance(ticker_df.columns, pd.MultiIndex):
-                    ticker_df.columns = ticker_df.columns.get_level_values(0)
+                # --- LIVE FIX: Request intraday 1-minute data for the absolute newest price ticks ---
+                live_df = ticker_obj.history(period="1d", interval="1m")
                 
-                if not ticker_df.empty:
-                    # --- FIX 2: Clear out trailing live intraday NaN structures ---
-                    close_series = ticker_df['Close'].dropna()
-                    if not close_series.empty:
-                        last_close = close_series.iloc[-1]
+                if isinstance(live_df.columns, pd.MultiIndex):
+                    live_df.columns = live_df.columns.get_level_values(0)
+                
+                live_df = live_df.dropna(subset=['Close'])
+                
+                if not live_df.empty:
+                    last_close = live_df['Close'].iloc[-1]
+                    fetched_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
+                    st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
+                else:
+                    # Fallback if the market hasn't opened yet today
+                    fallback_df = ticker_obj.history(period="5d")
+                    if isinstance(fallback_df.columns, pd.MultiIndex):
+                        fallback_df.columns = fallback_df.columns.get_level_values(0)
+                    fallback_df = fallback_df.dropna(subset=['Close'])
+                    if not fallback_df.empty:
+                        last_close = fallback_df['Close'].iloc[-1]
                         fetched_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
-                        st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
+                        st.sidebar.info(f"Market Closed. Last Close: ₹{fetched_price:.2f}")
+                        
     except Exception as e:
         st.sidebar.error(f"Error fetching: {e}")
 
@@ -203,14 +214,18 @@ with tab1:
             for t in unique_tickers:
                 try:
                     ticker_obj = yf.Ticker(t)
-                    df = ticker_obj.history(period="3mo", interval="1d")
                     
-                    # --- FIX 1: Flatten yfinance MultiIndex headers if they exist ---
+                    # Fetching 3 months of daily bars for clean Bollinger Bands
+                    df = ticker_obj.history(period="3mo", interval="1d")
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
-                    
-                    # --- FIX 2: Filter out incomplete NaN records before moving-window operations ---
                     df = df.dropna(subset=['Close'])
+                    
+                    # --- LIVE FIX: Pull absolute current tick from live intraday tracking ---
+                    intraday_df = ticker_obj.history(period="1d", interval="1m")
+                    if isinstance(intraday_df.columns, pd.MultiIndex):
+                        intraday_df.columns = intraday_df.columns.get_level_values(0)
+                    intraday_df = intraday_df.dropna(subset=['Close'])
                     
                     if not df.empty and len(df) >= 20:
                         close_series = df['Close']
@@ -218,8 +233,14 @@ with tab1:
                         df['STD20'] = close_series.rolling(window=20).std()
                         df['Upper_BB_06'] = df['SMA20'] + (0.6 * df['STD20'])
                         
-                        last_close = df['Close'].iloc[-1]
+                        # Calculate indicator bands using the historical daily series
                         last_bb = df['Upper_BB_06'].iloc[-1]
+                        
+                        # Assign live price if market is running, otherwise use historic daily close
+                        if not intraday_df.empty:
+                            last_close = intraday_df['Close'].iloc[-1]
+                        else:
+                            last_close = df['Close'].iloc[-1]
                         
                         live_market_data[t] = {
                             "current_price": float(last_close.item()) if hasattr(last_close, 'item') else float(last_close),
