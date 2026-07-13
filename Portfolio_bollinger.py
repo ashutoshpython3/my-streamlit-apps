@@ -152,10 +152,18 @@ if raw_ticker_input:
                 st.sidebar.caption(f"Resolved to system symbol: **{resolved_ticker_symbol}**")
                 ticker_obj = yf.Ticker(resolved_ticker_symbol)
                 ticker_df = ticker_obj.history(period="5d")
+                
+                # --- FIX 1: Flatten yfinance MultiIndex headers if they exist ---
+                if isinstance(ticker_df.columns, pd.MultiIndex):
+                    ticker_df.columns = ticker_df.columns.get_level_values(0)
+                
                 if not ticker_df.empty:
-                    last_close = ticker_df['Close'].squeeze().iloc[-1]
-                    fetched_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
-                    st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
+                    # --- FIX 2: Clear out trailing live intraday NaN structures ---
+                    close_series = ticker_df['Close'].dropna()
+                    if not close_series.empty:
+                        last_close = close_series.iloc[-1]
+                        fetched_price = float(last_close.item()) if hasattr(last_close, 'item') else float(last_close)
+                        st.sidebar.success(f"Live Price: ₹{fetched_price:.2f}")
     except Exception as e:
         st.sidebar.error(f"Error fetching: {e}")
 
@@ -196,14 +204,22 @@ with tab1:
                 try:
                     ticker_obj = yf.Ticker(t)
                     df = ticker_obj.history(period="3mo", interval="1d")
+                    
+                    # --- FIX 1: Flatten yfinance MultiIndex headers if they exist ---
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    
+                    # --- FIX 2: Filter out incomplete NaN records before moving-window operations ---
+                    df = df.dropna(subset=['Close'])
+                    
                     if not df.empty and len(df) >= 20:
-                        close_series = df['Close'].squeeze()
+                        close_series = df['Close']
                         df['SMA20'] = close_series.rolling(window=20).mean()
                         df['STD20'] = close_series.rolling(window=20).std()
                         df['Upper_BB_06'] = df['SMA20'] + (0.6 * df['STD20'])
                         
-                        last_close = df['Close'].squeeze().iloc[-1]
-                        last_bb = df['Upper_BB_06'].squeeze().iloc[-1]
+                        last_close = df['Close'].iloc[-1]
+                        last_bb = df['Upper_BB_06'].iloc[-1]
                         
                         live_market_data[t] = {
                             "current_price": float(last_close.item()) if hasattr(last_close, 'item') else float(last_close),
@@ -304,7 +320,7 @@ with tab1:
                     st.rerun()
 
 # ==========================================
-# TAB 2 & 3 PERFORMANCE & EDITS
+# TAB 2: HISTORICAL PERFORMANCE ANALYTICS
 # ==========================================
 with tab2:
     st.header("📈 Calendar Performance Analytics")
@@ -335,6 +351,9 @@ with tab2:
         display_hist_df = pd.DataFrame([{"Ticker": x["ticker"], "Qty": x["qty"], "Date Bought": x["buy_date"], "Buy Price (₹)": x["buy_price"], "Date Sold": x["sell_date"], "Sell Price (₹)": x["sell_price"], "Net Profit (₹)": (x["qty"] * x["sell_price"]) - (x["qty"] * x["buy_price"])} for x in st.session_state.history])
         st.dataframe(display_hist_df, use_container_width=True, hide_index=True)
 
+# ==========================================
+# TAB 3: POSITION MODIFICATION
+# ==========================================
 with tab3:
     st.header("🔧 Correct Existing Entry Data")
     active_positions = st.session_state.active
