@@ -91,6 +91,7 @@ def close_position(trade_id, sell_price, sell_date):
         
         position = response.data[0]
         closed_data = {
+            "id": position["id"],  # Explicitly passes the existing ID to satisfy the database rule
             "ticker": position["ticker"],
             "qty": position["qty"],
             "buy_price": position["buy_price"],
@@ -98,7 +99,9 @@ def close_position(trade_id, sell_price, sell_date):
             "sell_price": sell_price,
             "sell_date": sell_date
         }
+        # Insert into closed portfolio logs
         supabase.table("closed_positions").insert(closed_data).execute()
+        # Drop from active monitor list
         supabase.table("active_positions").delete().eq("id", trade_id).execute()
         return True
     except Exception as e:
